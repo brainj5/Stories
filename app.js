@@ -1,6 +1,6 @@
 // Initialize Supabase Client
-const SUPABASE_URL = 'YOUR_SUPABASE_URL';
-const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+const SUPABASE_URL = 'https://fcnnymmrfhfxyowidqzq.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_4rgB27hDgMt5Ezg_huJiyg_79oJ6Lu7';
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function switchTab(tabId, btnId) {
