@@ -10,7 +10,107 @@
    ========================================================================== */
 (() => {
   'use strict';
+// Initialize Supabase Client
+const SUPABASE_URL = 'YOUR_SUPABASE_URL_HERE';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY_HERE';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Fetch existing requests on page load
+window.addEventListener('DOMContentLoaded', fetchRequests);
+
+function switchTab(tabId, btnId) {
+  document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.classList.remove('active');
+    btn.setAttribute('aria-selected', 'false');
+  });
+
+  document.getElementById(tabId).classList.add('active');
+  const activeBtn = document.getElementById(btnId);
+  activeBtn.classList.add('active');
+  activeBtn.setAttribute('aria-selected', 'true');
+}
+
+async function handleFormSubmit(event, type, alertId) {
+  event.preventDefault();
+
+  const alertBox = document.getElementById(alertId);
+  const reqId = 'REQ-' + Math.floor(1000 + Math.random() * 9000);
+  
+  // Gather form data based on form type
+  let category, details, locationOrFacility;
+  if (type === 'Public Outreach Request') {
+    locationOrFacility = document.getElementById('location').value;
+    category = document.getElementById('primary-need').value;
+    details = document.getElementById('description').value;
+  } else {
+    locationOrFacility = document.getElementById('shelter-name').value + ' (' + document.getElementById('staff-role').value + ')';
+    category = document.getElementById('request-type').value;
+    details = document.getElementById('details').value;
+  }
+
+  // Insert data into Supabase
+  const { error } = await supabase.from('requests').insert([
+    {
+      request_id: reqId,
+      request_type: type,
+      category: category,
+      details: details,
+      location_or_facility: locationOrFacility,
+      status: 'Pending Review'
+    }
+  ]);
+
+  if (error) {
+    console.error('Error inserting data:', error);
+    alert('There was an error submitting your request. Please try again.');
+    return;
+  }
+
+  // Show success and refresh tracker list
+  alertBox.style.display = 'block';
+  event.target.reset();
+  fetchRequests();
+
+  setTimeout(() => {
+    alertBox.style.display = 'none';
+  }, 4000);
+}
+
+// Function to pull live data from Supabase into the Status Tracker
+async function fetchRequests() {
+  const { data, error } = await supabase
+    .from('requests')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching requests:', error);
+    return;
+  }
+
+  const trackerList = document.getElementById('tracker-list');
+  trackerList.innerHTML = '';
+
+  data.forEach(req => {
+    let badgeClass = 'badge-pending';
+    if (req.status === 'In Progress') badgeClass = 'badge-in-progress';
+    if (req.status === 'Completed') badgeClass = 'badge-completed';
+
+    const newCard = document.createElement('div');
+    newCard.className = 'status-card';
+    newCard.innerHTML = `
+      <div class="status-header">
+        <span class="status-id">${req.request_id}</span>
+        <span class="badge ${badgeClass}">${req.status}</span>
+      </div>
+      <strong class="card-title">${req.request_type} (${req.category})</strong>
+      <p class="card-sub">Location/Facility: ${req.location_or_facility}</p>
+      <p class="card-meta"><em>Details: ${req.details}</em></p>
+    `;
+    trackerList.appendChild(newCard);
+  });
+}
   /* 1. Utilities ---------------------------------------------------------- */
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
