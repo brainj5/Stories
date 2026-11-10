@@ -1,125 +1,44 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Shelter & Outreach Coordination Network</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Chapterhouse</title>
+  <meta name="description" content="Serial novels, released episode by episode. Read on your schedule, write on yours.">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300..800&family=Literata:ital,opsz,wght@0,7..72,300..700;1,7..72,300..700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <a class="skip-link" href="#app">Skip to content</a>
 
-  <header>
-    <h1>Community & Shelter Support Network</h1>
-    <p>Bridging direct community support and shelter operations</p>
+  <header class="topbar" id="topbar">
+    <a class="brand" href="#/" aria-label="Chapterhouse home">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor"/><path d="M8 8h8M8 12h8M8 16h5" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>Chapterhouse</span>
+    </a>
+    <nav class="topnav" aria-label="Primary">
+      <a href="#/">Home</a>
+      <a href="#/daily">Schedule</a>
+      <a href="#/browse">Browse</a>
+      <a href="#/studio" data-auth="in">Studio</a>
+    </nav>
+    <form class="search" role="search" id="searchForm">
+      <label class="sr-only" for="searchInput">Search series</label>
+      <input id="searchInput" type="search" placeholder="Search series, authors, tags" autocomplete="off">
+    </form>
+    <div class="account" id="accountMenu"></div>
   </header>
 
-  <nav role="tablist" aria-label="Portal Navigation">
-    <button class="nav-btn active" role="tab" aria-selected="true" aria-controls="public-tab" id="tab-1" onclick="switchTab('public-tab', 'tab-1')">Public Outreach Form</button>
-    <button class="nav-btn" role="tab" aria-selected="false" aria-controls="shelter-tab" id="tab-2" onclick="switchTab('shelter-tab', 'tab-2')">Shelter Staff Portal</button>
-    <button class="nav-btn" role="tab" aria-selected="false" aria-controls="tracker-tab" id="tab-3" onclick="switchTab('tracker-tab', 'tab-3')">Status Tracker</button>
-  </nav>
+  <main id="app" class="app" tabindex="-1"></main>
 
-  <main>
-    <!-- TAB 1: Public Outreach Form -->
-    <section id="public-tab" class="tab-content active" role="tabpanel" aria-labelledby="tab-1">
-      <h2>Report an Individual Needing Outreach Assistance</h2>
-      <p class="section-desc">Submit location and basic detail so our mobile team can direct health care, hygiene, and shelter support.</p>
-      
-      <div id="public-alert" class="alert-success" role="alert">Report submitted successfully! Track progress in the Status Tracker tab.</div>
+  <footer class="footer">
+    <span>Chapterhouse prototype. Demo data stays in this browser.</span>
+  </footer>
 
-      <form id="public-form" onsubmit="handleFormSubmit(event, 'Public Outreach Request', 'public-alert')">
-        <div class="form-group">
-          <label for="location">Location / Cross Streets *</label>
-          <input type="text" id="location" required placeholder="e.g., 5th Ave and Main St, near the park bench">
-        </div>
-
-        <div class="form-group">
-          <label for="primary-need">Primary Need Identified *</label>
-          <select id="primary-need" required>
-            <option value="">Select a service category...</option>
-            <option value="Hygiene & Physical Restoration">Hygiene & Physical Restoration</option>
-            <option value="Medical / Health Care">Medical / Health Care</option>
-            <option value="Emergency Shelter Intake">Emergency Shelter Intake</option>
-            <option value="Employment Pathways / Training">Employment Pathways / Training</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="description">Physical Description & Additional Notes *</label>
-          <textarea id="description" required placeholder="Brief description (clothing, identifiable markers) and immediate observations..."></textarea>
-        </div>
-
-        <button type="submit" class="btn-submit">Submit Outreach Request</button>
-      </form>
-    </section>
-
-    <!-- TAB 2: Shelter Staff Portal -->
-    <section id="shelter-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-2">
-      <h2>Shelter Staff & Case Manager Portal</h2>
-      <p class="section-desc">Log facility updates, request partner resources, or communicate operational concerns directly.</p>
-
-      <div id="shelter-alert" class="alert-success" role="alert">Shelter report logged! Our coordination team has been notified.</div>
-
-      <form id="shelter-form" onsubmit="handleFormSubmit(event, 'Shelter Resource Request', 'shelter-alert')">
-        <div class="form-group">
-          <label for="shelter-name">Facility Name *</label>
-          <input type="text" id="shelter-name" required placeholder="e.g., Downtown Hope Center">
-        </div>
-
-        <div class="form-group">
-          <label for="staff-role">Your Role / Title *</label>
-          <input type="text" id="staff-role" required placeholder="e.g., Lead Case Manager">
-        </div>
-
-        <div class="form-group">
-          <label for="request-type">Request / Report Category *</label>
-          <select id="request-type" required>
-            <option value="">Select category...</option>
-            <option value="On-site Grooming / Hygiene Unit">On-site Grooming / Hygiene Unit</option>
-            <option value="Job Placement / Corporate Partner Connection">Job Placement / Corporate Partner Connection</option>
-            <option value="Facility Capacity & Operational Support">Facility Capacity & Operational Support</option>
-            <option value="Health & Medical Care Referral">Health & Medical Care Referral</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="details">Operational Concerns / Request Details *</label>
-          <textarea id="details" required placeholder="Describe specific resource gaps, number of residents affected, or operational needs..."></textarea>
-        </div>
-
-        <button type="submit" class="btn-submit">Log Shelter Submission</button>
-      </form>
-    </section>
-
-    <!-- TAB 3: Request Status Tracker -->
-    <section id="tracker-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-3">
-      <h2>Live Request Status Tracker</h2>
-      <p class="section-desc">Real-time tracking for active public outreach requests and shelter resource requests.</p>
-
-      <div id="tracker-list">
-        <div class="status-card">
-          <div class="status-header">
-            <span class="status-id">REQ-1042</span>
-            <span class="badge badge-in-progress">In Progress</span>
-          </div>
-          <strong class="card-title">Public Outreach Request</strong>
-          <p class="card-sub">Location: 4th St & Broadway | Need: Hygiene & Mobile Care</p>
-          <p class="card-meta"><em>Status Update: Mobile team scheduled for direct check-in today.</em></p>
-        </div>
-
-        <div class="status-card">
-          <div class="status-header">
-            <span class="status-id">REQ-1041</span>
-            <span class="badge badge-pending">Pending Review</span>
-          </div>
-          <strong class="card-title">Shelter Resource Request</strong>
-          <p class="card-sub">Facility: Eastside Haven Shelter | Need: Job Placement Partner Pipeline</p>
-          <p class="card-meta"><em>Status Update: Received. Account manager assigned to contact shelter lead.</em></p>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <script src="script.log.js"></script>
+  <div class="toast-stack" id="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
 </body>
 </html>
