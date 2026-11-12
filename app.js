@@ -1,7 +1,5 @@
 /* ==========================================================================
-   Chapterhouse v2 — app.js
-   Webtoon-style serial novel platform. Client-side prototype whose data layer
-   mirrors the production schema:
+   StoriesFromBeyond v2 — app.js
      novels, chapters (chapter_number, author_note), subscriptions,
      chapter_comments, notifications, chapter_likes, reading_progress
    Sections: 1 utils · 2 storage+seed · 3 data API · 4 auth · 5 router/shell ·
