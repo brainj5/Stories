@@ -73,6 +73,9 @@
   const GENRES = ['Fantasy', 'Romance', 'Mystery', 'Sci-fi', 'Thriller', 'Drama', 'Horror', 'Slice of life', 'Historical', 'Comedy'];
   const COVERS = ['#2b3be8', '#17181c', '#0f766e', '#b91c1c', '#7c3aed', '#c2410c', '#0369a1', '#4d7c0f', '#9d174d', '#78350f'];
   const P = (...ps) => ps.map((t) => `<p>${t}</p>`).join('');
+  const DEMO_NAME = 'Stories From Beyond';
+  const DEMO_PASSWORD = 'Stories From Beyond';
+  const DEMO_BIO = `The official Stories From Beyond account. Log in as demo / ${DEMO_PASSWORD} to try the Studio.`;
 
   async function seed() {
     const t0 = now();
@@ -81,7 +84,7 @@
       { id: 'u_mara', username: 'maravoss', name: 'Mara Voss', email: 'mara@example.com', password_hash: pw, bio: 'Maps for places that refuse to stay put. Salt Cartographer updates Thursdays.', created_at: t0 - 400 * DAY },
       { id: 'u_june', username: 'juneokafor', name: 'June Okafor', email: 'june@example.com', password_hash: pw, bio: 'Mysteries set in houses with too many rooms. Former archivist.', created_at: t0 - 300 * DAY },
       { id: 'u_theo', username: 'theolind', name: 'Theo Lindqvist', email: 'theo@example.com', password_hash: pw, bio: 'Quiet novels about weather and the people who notice it.', created_at: t0 - 220 * DAY },
-      { id: 'u_demo', username: 'demo', name: 'Demo Writer', email: 'demo@example.com', password_hash: pw, bio: 'Demo account. Log in as demo / chapterhouse to try the Studio.', created_at: t0 - 10 * DAY },
+      { id: 'u_demo', username: 'demo', name: DEMO_NAME, email: 'demo@example.com', password_hash: await sha256(DEMO_PASSWORD), bio: DEMO_BIO, created_at: t0 - 10 * DAY },
     ];
     const novels = [], chapters = [];
     const todayDow = new Date().getDay();
@@ -195,7 +198,7 @@
       { id: 'nt1', user_id: 'u_demo', type: 'new_chapter', novel_id: nv('The Salt Cartographer'), chapter_id: ch('Six channels'), created_at: t0 - 0.2 * DAY, read_at: null },
       { id: 'nt2', user_id: 'u_demo', type: 'new_chapter', novel_id: nv('Greenhouse Letters'), chapter_id: ch('Re: re: the tomatoes'), created_at: t0 - 1 * DAY, read_at: null },
     ];
-    return { version: 2, users, novels, chapters, subscriptions, chapter_comments, notifications, chapter_likes: [], reading_progress: {}, session: null };
+    return seedSocial({ version: 2, users, novels, chapters, subscriptions, chapter_comments, notifications, chapter_likes: [], reading_progress: {}, session: null });
   }
 
   /* 3. Data API (each method = one server route / Supabase query) -------- */
@@ -241,6 +244,7 @@
         db.chapter_likes = db.chapter_likes.filter((l) => !ids.includes(l.chapter_id));
         db.subscriptions = db.subscriptions.filter((s) => s.novel_id !== id);
         db.notifications = db.notifications.filter((x) => x.novel_id !== id);
+        db.favorites = db.favorites.filter((f) => f.novel_id !== id);
         db.novels = db.novels.filter((n) => n.id !== id); save();
       },
       recordView(novelId, chapterId) {
@@ -315,10 +319,96 @@
     },
     progress: {
       get: (userId, novelId) => db.reading_progress?.[userId]?.[novelId] || null,
-      set(userId, novelId, chapterId) { db.reading_progress ||= {}; db.reading_progress[userId] ||= {}; db.reading_progress[userId][novelId] = chapterId; save(); },
+      set(userId, novelId, chapterId) {
+        db.reading_progress ||= {}; db.reading_progress[userId] ||= {}; db.reading_progress[userId][novelId] = chapterId;
+        db.reading_log ||= {}; db.reading_log[userId] = { novel_id: novelId, chapter_id: chapterId, at: now() }; // most recent read, shown to friends
+        save();
+      },
       readSet: (userId) => { const s = new Set(); try { Object.values(db.reading_progress[userId] || {}).forEach((id) => s.add(id)); } catch {} return s; },
     },
+    favorites: {
+      has: (userId, novelId) => db.favorites.some((f) => f.user_id === userId && f.novel_id === novelId),
+      forUser: (userId) => db.favorites.filter((f) => f.user_id === userId).sort((a, b) => b.created_at - a.created_at).map((f) => api.novels.byId(f.novel_id)).filter((n) => n && api.novels.isPublic(n)),
+      async toggle(userId, novelId) {
+        if (api.favorites.has(userId, novelId)) { db.favorites = db.favorites.filter((f) => !(f.user_id === userId && f.novel_id === novelId)); save(); return false; }
+        db.favorites.push({ user_id: userId, novel_id: novelId, created_at: now() }); save(); return true;
+      },
+    },
+    /** Friendships are requests: pending until the recipient accepts. */
+    friends: {
+      pair: (a, b) => db.friendships.find((f) => (f.from === a && f.to === b) || (f.from === b && f.to === a)),
+      status(me, other) { const f = api.friends.pair(me, other); if (!f) return 'none'; if (f.status === 'accepted') return 'friends'; return f.from === me ? 'outgoing' : 'incoming'; },
+      list: (userId) => db.friendships.filter((f) => f.status === 'accepted' && (f.from === userId || f.to === userId)).map((f) => api.users.byId(f.from === userId ? f.to : f.from)).filter(Boolean),
+      incoming: (userId) => db.friendships.filter((f) => f.status === 'pending' && f.to === userId),
+      async request(from, to) { if (from === to || api.friends.pair(from, to)) return; db.friendships.push({ id: 'fr_' + uid(), from, to, status: 'pending', created_at: now() }); save(); },
+      async accept(me, other) { const f = api.friends.pair(me, other); if (f && f.to === me) { f.status = 'accepted'; f.accepted_at = now(); save(); } },
+      async remove(me, other) { const f = api.friends.pair(me, other); db.friendships = db.friendships.filter((x) => x !== f); save(); },
+      /** Each friend with the book they most recently read, newest first. */
+      activity(userId) {
+        return api.friends.list(userId).map((user) => {
+          const log = db.reading_log?.[user.id]; const n = log && api.novels.byId(log.novel_id); const c = log && api.chapters.byId(log.chapter_id);
+          if (!n || !c || !api.novels.isPublic(n) || c.status !== 'published') return { user, at: 0 };
+          return { user, novel: n, chapterNo: api.novels.published(n.id).indexOf(c) + 1, at: log.at };
+        }).sort((a, b) => b.at - a.at);
+      },
+    },
+    /** Featured: the top 5 up-and-coming series, picked once per local day. */
+    featured: {
+      today: () => new Date().toLocaleDateString('en-CA'),
+      nextRefresh: () => { const d = new Date(); d.setHours(24, 0, 0, 0); return d.getTime(); },
+      picks() {
+        const day = api.featured.today();
+        const cached = db.featured_daily;
+        if (cached?.date === day) { const list = cached.ids.map(api.novels.byId).filter((n) => n && api.novels.isPublic(n)); if (list.length) return list; }
+        // Momentum, weighted toward younger series so new work can surface.
+        const scored = api.novels.listPublic().map((n) => {
+          const st = api.novels.stats(n); const ageDays = Math.max(7, (now() - n.created_at) / DAY);
+          const fresh = (n.last_published_at || 0) > now() - 7 * DAY ? 1.25 : 1;
+          return { n, score: ((st.subs + st.likes * 0.5 + st.comments * 20) / Math.sqrt(ageDays)) * fresh };
+        }).sort((a, b) => b.score - a.score).slice(0, 5).map((x) => x.n);
+        db.featured_daily = { date: day, ids: scored.map((n) => n.id) }; save();
+        return scored;
+      },
+    },
   };
+
+  /** Friends, favorites and reading activity for the demo accounts. Also upgrades older saved data. */
+  function seedSocial(d) {
+    const t0 = now();
+    const nv = (t) => d.novels.find((n) => n.title === t);
+    const read = (title, i, ago) => {
+      const n = nv(title); if (!n) return null;
+      const chs = d.chapters.filter((c) => c.novel_id === n.id && c.status === 'published').sort((a, b) => a.chapter_number - b.chapter_number);
+      const c = chs[Math.min(i, chs.length - 1)]; return c ? { novel_id: n.id, chapter_id: c.id, at: t0 - ago * DAY } : null;
+    };
+    const has = (id) => d.users.some((u) => u.id === id);
+    // Older saved data still has the original demo name; rename it unless the user already changed it.
+    const demo = d.users.find((u) => u.id === 'u_demo');
+    if (demo && demo.name === 'Demo Writer') { demo.name = DEMO_NAME; if (/^Demo account\./.test(demo.bio || '')) demo.bio = DEMO_BIO; }
+    if (!d.friendships) {
+      d.friendships = [
+        { id: 'fr1', from: 'u_demo', to: 'u_mara', status: 'accepted', created_at: t0 - 8 * DAY },
+        { id: 'fr2', from: 'u_june', to: 'u_demo', status: 'accepted', created_at: t0 - 6 * DAY },
+        { id: 'fr3', from: 'u_theo', to: 'u_demo', status: 'pending', created_at: t0 - 0.5 * DAY },
+        { id: 'fr4', from: 'u_mara', to: 'u_june', status: 'accepted', created_at: t0 - 200 * DAY },
+        { id: 'fr5', from: 'u_theo', to: 'u_mara', status: 'accepted', created_at: t0 - 150 * DAY },
+      ].filter((f) => has(f.from) && has(f.to));
+    }
+    if (!d.favorites) {
+      d.favorites = [
+        ['u_demo', 'The Salt Cartographer', 9], ['u_demo', 'Greenhouse Letters', 3], ['u_demo', 'Northing', 1],
+        ['u_mara', 'Thirteen Doors on Ashby Lane', 30], ['u_mara', 'Northing', 12],
+        ['u_june', 'The Salt Cartographer', 50], ['u_theo', 'Greenhouse Letters', 8],
+      ].map(([user_id, t, ago]) => ({ user_id, novel_id: nv(t)?.id, created_at: t0 - ago * DAY })).filter((f) => f.novel_id && has(f.user_id));
+    }
+    if (!d.reading_log) {
+      d.reading_log = {};
+      [['u_mara', 'Thirteen Doors on Ashby Lane', 2, 0.04], ['u_june', 'The Salt Cartographer', 3, 0.3], ['u_theo', 'Greenhouse Letters', 1, 2], ['u_demo', 'The Salt Cartographer', 2, 1]]
+        .forEach(([u, t, i, ago]) => { const r = read(t, i, ago); if (r && has(u)) d.reading_log[u] = r; });
+    }
+    if (d.featured_daily === undefined) d.featured_daily = null;
+    return d;
+  }
 
   /* 4. Auth ---------------------------------------------------------------- */
   const auth = {
@@ -347,12 +437,12 @@
   const route = (pattern, handler) => { const keys = []; const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '/?$'); routes.push({ re, keys, handler }); };
   const go = (h) => { location.hash = h; };
   const parseHash = () => { const raw = location.hash.replace(/^#/, '') || '/'; const [path, qs] = raw.split('?'); return { path, query: Object.fromEntries(new URLSearchParams(qs || '')) }; };
-  const setTitle = (t) => { document.title = t ? `${t} · Chapterhouse` : 'Chapterhouse'; };
+  const setTitle = (t) => { document.title = t ? `${t} · Stories From Beyond` : 'Stories From Beyond'; };
   let cleanup = null; // per-view teardown (observers, scroll listeners)
 
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
-    document.body.classList.remove('reading');
+    document.body.classList.remove('reading', 'home');
     const { path, query } = parseHash(); const app = $('#app');
     for (const r of routes) {
       const m = path.match(r.re);
@@ -364,7 +454,7 @@
 
   function renderShell() {
     const u = auth.current(); const { path } = parseHash();
-    const unread = u ? api.notifications.unread(u.id) : 0;
+    const unread = u ? api.notifications.unread(u.id) + api.friends.incoming(u.id).length : 0;
     $('#accountMenu').innerHTML = u
       ? `<a class="bell" href="#/notifications" aria-label="Notifications${unread ? `, ${unread} unread` : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>${unread ? `<span class="dot">${unread > 9 ? '9+' : unread}</span>` : ''}</a>
          <a class="avatar" href="#/u/${esc(u.username)}" aria-label="Your profile">${esc(initials(u.name))}</a>`
@@ -384,25 +474,117 @@
   const dayLink = (d, sel, today) => `<a href="#/daily/${d}" class="${d === sel ? 'on' : ''} ${d === today ? 'today' : ''}"><span>${DAYS[d]}</span>${d === today ? '<span class="d">today</span>' : ''}</a>`;
 
   /* 6a. Home --------------------------------------------------------------- */
+  const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>';
+  const chev = (dir) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${dir < 0 ? 'M15 18l-6-6 6-6' : 'M9 6l6 6-6 6'}"/></svg>`;
+  const userLink = (u) => `<a class="avatar" href="#/u/${esc(u.username)}" aria-label="${esc(u.name)}'s profile">${esc(initials(u.name))}</a>`;
+
   route('/', async ({ app }) => {
-    setTitle('');
-    const pub = api.novels.listPublic(); const today = new Date().getDay();
-    const todays = pub.filter((n) => n.update_day === today);
-    const rising = pub.map((n) => ({ n, st: api.novels.stats(n) })).sort((a, b) => b.st.trend - a.st.trend);
-    const pick = pub.find((n) => n.featured) || rising[0]?.n;
+    setTitle(''); document.body.classList.add('home');
+    const me = auth.current();
+    const pub = api.novels.listPublic();
+    const picks = api.featured.picks();
+    const trending = pub.map((n) => ({ n, st: api.novels.stats(n) })).sort((a, b) => b.st.trend - a.st.trend).slice(0, 12);
     const fresh = [...pub].sort((a, b) => b.created_at - a.created_at).slice(0, 10);
     const byGenre = GENRES.map((g) => ({ g, list: pub.filter((n) => n.genres.includes(g)) })).filter((x) => x.list.length).slice(0, 3);
+
+    const slide = (n, i) => {
+      const a = api.users.byId(n.author_id); const st = api.novels.stats(n);
+      return `<article class="feat-slide" aria-roledescription="slide" aria-label="${i + 1} of ${picks.length}: ${esc(n.title)}" ${i ? 'hidden' : ''}>
+        <a class="feat-art ${n.cover_image ? 'has-image' : ''}" href="#/novel/${esc(n.slug)}" style="--cv:${esc(n.cover_color)};${n.cover_image ? `background-image:url('${esc(n.cover_image)}')` : ''}">
+          <span class="feat-letter" aria-hidden="true">${esc(n.title[0])}</span>
+          <span class="feat-rank">#${i + 1} up and coming</span>
+          <span class="feat-title">${esc(n.title)}</span>
+        </a>
+        <div class="feat-info">
+          <div><div class="feat-by">${esc(n.genres[0] || 'Series')} by <a href="#/u/${esc(a.username)}">${esc(a.name)}</a></div><p>${esc(n.synopsis)}</p></div>
+          <ul class="feat-stats"><li><b>${compact(st.subs)}</b> subscribers</li><li><b>${st.chapters}</b> ${st.chapters === 1 ? 'chapter' : 'chapters'}</li><li><b>${compact(st.likes)}</b> likes</li></ul>
+        </div></article>`;
+    };
+
+    const featured = picks.length ? `
+      <div class="feat" id="feat" role="region" aria-roledescription="carousel" aria-label="Featured series">
+        <div class="feat-stage">${picks.map(slide).join('')}
+          ${picks.length > 1 ? `<button class="feat-arrow prev" id="featPrev" aria-label="Previous featured series">${chev(-1)}</button><button class="feat-arrow next" id="featNext" aria-label="Next featured series">${chev(1)}</button>` : ''}
+        </div>
+        ${picks.length > 1 ? `<div class="feat-thumbs" role="tablist" aria-label="Choose a featured series">${picks.map((n, i) => `<button role="tab" aria-selected="${i === 0}" aria-label="${esc(n.title)}" data-i="${i}">${thumb(n, { sm: true, badge: false })}</button>`).join('')}</div>` : ''}
+      </div>` : `<div class="hub-empty"><p>Nothing to feature yet. Published series show up here.</p></div>`;
+
+    let friendsBody;
+    if (!me) friendsBody = `<div class="hub-empty"><p>Log in to see what your friends are reading.</p><a class="btn btn-sm" href="#/login">Log in</a></div>`;
+    else {
+      const requests = api.friends.incoming(me.id).map((r) => api.users.byId(r.from)).filter(Boolean);
+      const activity = api.friends.activity(me.id);
+      friendsBody = (requests.length || activity.length) ? `<ul class="hub-list">
+        ${requests.map((u) => `<li class="fr fr-req">${userLink(u)}<div class="fr-main"><a class="fr-name" href="#/u/${esc(u.username)}">${esc(u.name)}</a><div class="fr-act">Wants to be friends</div><div class="row fr-btns"><button class="btn btn-primary btn-sm" data-accept="${u.id}">Accept</button><button class="btn btn-ghost btn-sm" data-decline="${u.id}">Decline</button></div></div></li>`).join('')}
+        ${activity.map(({ user, novel, chapterNo, at }) => `<li class="fr">${userLink(user)}<div class="fr-main"><a class="fr-name" href="#/u/${esc(user.username)}">${esc(user.name)}</a>
+          ${novel ? `<div class="fr-act">Reading <a href="#/novel/${esc(novel.slug)}">${esc(novel.title)}</a></div><div class="fr-time">Chapter ${chapterNo}, ${esc(timeAgo(at))}</div>` : '<div class="fr-time">Hasn’t read anything yet</div>'}</div>
+          ${novel ? `<a class="go" href="#/novel/${esc(novel.slug)}" aria-label="Open ${esc(novel.title)}">${ICON_PLAY}</a>` : ''}</li>`).join('')}
+      </ul>` : `<div class="hub-empty"><p>No friends yet. Open someone’s profile and choose Add friend.</p><a class="btn btn-ghost btn-sm" href="#/browse">Find authors</a></div>`;
+    }
+
+    let favBody;
+    if (!me) favBody = `<div class="hub-empty"><p>Log in and favorite a series to keep it here.</p><a class="btn btn-sm" href="#/signup">Sign up</a></div>`;
+    else {
+      const favs = api.favorites.forUser(me.id);
+      favBody = favs.length ? `<ul class="hub-list">${favs.map((n) => {
+        const chs = api.novels.published(n.id); const prog = api.progress.get(me.id, n.id); const at = prog ? chs.findIndex((c) => c.id === prog) + 1 : 0;
+        const pct = chs.length ? Math.round((at / chs.length) * 100) : 0;
+        return `<li class="fav"><a href="#/novel/${esc(n.slug)}" tabindex="-1" aria-hidden="true">${thumb(n, { sm: true })}</a><div class="fav-main"><a class="fav-t" href="#/novel/${esc(n.slug)}">${esc(n.title)}</a>
+          <div class="fav-m">${esc(n.genres[0] || '')}${n.genres[0] ? ', ' : ''}${compact(api.novels.subscribers(n))} subscribers</div>
+          <div class="fav-m">${at ? `Read ${at} of ${chs.length}` : `${plural(chs.length, 'chapter')}, not started`}</div>
+          <div class="fav-bar" aria-hidden="true"><i style="width:${pct}%"></i></div></div>
+          <a class="go" href="#/novel/${esc(n.slug)}/ch/${at && at < chs.length ? at + 1 : Math.max(at, 1)}" aria-label="${at ? 'Continue' : 'Start'} ${esc(n.title)}">${ICON_PLAY}</a></li>`;
+      }).join('')}</ul>` : `<div class="hub-empty"><p>No favorites yet. Choose Favorite on any series page to pin it here.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div>`;
+    }
+
+    const tCard = ({ n, st }) => `<a class="s-card t-card" href="#/novel/${esc(n.slug)}">${thumb(n)}<div class="st">${esc(n.title)}</div><div class="t-meta"><span>♥ ${compact(st.likes)}</span><span>${compact(st.subs)} subs</span></div></a>`;
+
     app.innerHTML = `
-      <section class="sched">
-        <div class="sched-head"><h1>This week</h1><a class="small" style="color:var(--ultra);font-weight:600" href="#/daily">Full schedule</a></div>
-        <nav class="days" aria-label="Release days">${[1, 2, 3, 4, 5, 6, 0].map((d) => dayLink(d, today, today)).join('')}</nav>
-        ${todays.length ? `<div class="sched-rail">${rail(todays)}</div>` : `<div class="empty sched-empty"><h3>No releases scheduled today</h3><p>Pick another day above, or browse everything.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div>`}
-        ${pick ? `<a class="hero-pick" href="#/novel/${esc(pick.slug)}">${thumb(pick, { badge: false })}<div><div class="k">Editor's pick</div><h2>${esc(pick.title)}</h2><p>${esc(pick.synopsis)}</p><span class="btn btn-sm">Start reading</span></div></a>` : ''}
+      <section class="hub">
+        <div class="hub-feat">
+          <div class="hub-head"><h1>Featured</h1><span class="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span id="featRefresh"></span></span></div>
+          ${featured}
+        </div>
+        <div class="hub-col" id="hubFriends"><div class="hub-head"><h2>Friend activity</h2>${me ? `<a href="#/u/${esc(me.username)}">Your friends</a>` : ''}</div>${friendsBody}</div>
+        <div class="hub-col"><div class="hub-head"><h2>Your favorites</h2>${me ? `<a href="#/u/${esc(me.username)}">See all</a>` : ''}</div>${favBody}</div>
       </section>
-      <section class="section"><div class="section-head"><h2>Rising now<span class="sub">by subscribers, likes and comments this week</span></h2><a href="#/browse?sort=trending">See all</a></div>
-        <ol class="rank">${rising.slice(0, 6).map(({ n, st }) => `<li><a href="#/novel/${esc(n.slug)}">${thumb(n, { sm: true })}</a><div><a class="rt" href="#/novel/${esc(n.slug)}">${esc(n.title)}</a><div class="rm">${esc(n.genres[0] || '')} · ${compact(st.subs)} subscribers · ${plural(st.chapters, 'chapter')}</div></div></li>`).join('')}</ol></section>
+      <section class="section trend"><div class="section-head"><h2>Top trending</h2><a href="#/browse?sort=trending">See all</a></div>
+        <div class="trend-wrap"><button class="rail-arrow prev" id="trPrev" aria-label="Scroll trending back">${chev(-1)}</button><div class="rail" id="trendRail">${trending.map(tCard).join('')}</div><button class="rail-arrow next" id="trNext" aria-label="Scroll trending forward">${chev(1)}</button></div></section>
       <section class="section"><div class="section-head"><h2>New series</h2><a href="#/browse?sort=new">See all</a></div>${rail(fresh)}</section>
       ${byGenre.map(({ g, list }) => `<section class="section"><div class="section-head"><h2>${esc(g)}</h2><a href="#/browse?genre=${encodeURIComponent(g)}">See all</a></div>${rail(list)}</section>`).join('')}`;
+
+    // Featured carousel
+    const slides = $$('.feat-slide', app), tabs = $$('.feat-thumbs button', app); let cur = 0;
+    const show = (i) => { cur = (i + slides.length) % slides.length; slides.forEach((s, k) => { s.hidden = k !== cur; }); tabs.forEach((t, k) => t.setAttribute('aria-selected', String(k === cur))); };
+    $('#featPrev')?.addEventListener('click', () => show(cur - 1));
+    $('#featNext')?.addEventListener('click', () => show(cur + 1));
+    tabs.forEach((t) => t.addEventListener('click', () => show(+t.dataset.i)));
+    $('#feat')?.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') show(cur - 1); if (e.key === 'ArrowRight') show(cur + 1); });
+
+    // Countdown to the daily refresh
+    const tick = () => {
+      const ms = api.featured.nextRefresh() - now();
+      if (api.featured.today() !== db.featured_daily?.date) { render(); return; }
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+      $('#featRefresh').textContent = `New picks in ${h}h ${m}m`;
+    };
+    tick(); const timer = setInterval(tick, 30000);
+
+    // Friend requests
+    $('#hubFriends').addEventListener('click', async (e) => {
+      const acc = e.target.closest('[data-accept]'); const dec = e.target.closest('[data-decline]');
+      if (acc) { await api.friends.accept(me.id, acc.dataset.accept); toast(`You and ${api.users.byId(acc.dataset.accept).name} are now friends`); render(); }
+      if (dec) { await api.friends.remove(me.id, dec.dataset.decline); toast('Friend request declined'); render(); }
+    });
+
+    // Trending rail arrows
+    const tr = $('#trendRail'), trPrev = $('#trPrev'), trNext = $('#trNext');
+    const upd = () => { trPrev.disabled = tr.scrollLeft < 4; trNext.disabled = tr.scrollLeft + tr.clientWidth >= tr.scrollWidth - 4; };
+    tr.addEventListener('scroll', upd, { passive: true }); window.addEventListener('resize', upd); upd();
+    trPrev.addEventListener('click', () => tr.scrollBy({ left: -tr.clientWidth * 0.8, behavior: 'smooth' }));
+    trNext.addEventListener('click', () => tr.scrollBy({ left: tr.clientWidth * 0.8, behavior: 'smooth' }));
+
+    cleanup = () => { clearInterval(timer); window.removeEventListener('resize', upd); };
   });
 
   /* 6b. Schedule ------------------------------------------------------------ */
@@ -442,6 +624,7 @@
     setTitle(n.title);
     const a = api.users.byId(n.author_id); const chs = api.novels.published(n.id); const st = api.novels.stats(n);
     const subbed = me ? api.subscriptions.has(me.id, n.id) : false;
+    const faved = me ? api.favorites.has(me.id, n.id) : false;
     const prog = me ? api.progress.get(me.id, n.id) : null; const progIdx = prog ? chs.findIndex((c) => c.id === prog) : -1;
     const readSet = me ? api.progress.readSet(me.id) : new Set();
     const asc = query.sort === 'asc';
@@ -456,6 +639,7 @@
             <div class="series-cta">
               ${chs.length ? `<a class="btn btn-primary btn-lg" href="#/novel/${esc(n.slug)}/ch/${progIdx > 0 ? progIdx + 1 : 1}">${progIdx > 0 ? `Continue · Ch. ${progIdx + 1}` : 'Read first chapter'}</a>` : '<span></span>'}
               <button class="btn btn-ghost btn-lg sub-btn" id="subBtn" aria-pressed="${subbed}">${subbed ? '✓ Subscribed' : '+ Subscribe'}</button>
+              <button class="btn btn-ghost btn-lg fav-btn" id="favBtn" aria-pressed="${faved}">${faved ? '★ Favorited' : '☆ Favorite'}</button>
             </div></div></div></div>
       <div class="series-body series-layout">
         <div>
@@ -475,6 +659,11 @@
       if (!requireAuth()) return;
       const on = await api.subscriptions.toggle(me.id, n.id);
       toast(on ? `Subscribed. You will be notified when ${a.name} posts a new chapter.` : 'Unsubscribed'); render();
+    });
+    $('#favBtn').addEventListener('click', async () => {
+      if (!requireAuth()) return;
+      const on = await api.favorites.toggle(me.id, n.id);
+      toast(on ? `Added ${n.title} to your favorites` : `Removed ${n.title} from your favorites`); render();
     });
   });
 
@@ -626,7 +815,7 @@
       <div class="field"><label for="li_pw">Password</label><input class="input" id="li_pw" type="password" autocomplete="current-password" required></div>
       <div class="form-error" id="err" role="alert"></div><button class="btn btn-primary btn-block btn-lg" type="submit">Log in</button></form>
       <p class="alt">New here? <a href="#/signup">Create an account</a></p>
-      <div class="demo">Demo accounts: <code>demo</code> <code>maravoss</code> <code>juneokafor</code> <code>theolind</code> · password <code>chapterhouse</code></div></section>`;
+      <div class="demo">Demo account: <code>demo</code> · password <code>${esc(DEMO_PASSWORD)}</code><br>Sample authors: <code>maravoss</code> <code>juneokafor</code> <code>theolind</code> · password <code>chapterhouse</code></div></section>`;
     $('#loginForm').addEventListener('submit', async (e) => { e.preventDefault(); try { const u = await auth.login($('#li_id').value, $('#li_pw').value); toast(`Logged in as ${u.name}`); go(query.next || '/'); } catch (err) { $('#err').textContent = err.message; } });
   });
   route('/signup', async ({ app, query }) => {
@@ -648,11 +837,28 @@
     setTitle(u.name); const me = auth.current(); const mine = me && me.id === u.id;
     const published = api.novels.byAuthor(u.id).filter(api.novels.isPublic);
     const subs = api.subscriptions.forUser(u.id).map((s) => api.novels.byId(s.novel_id)).filter((n) => n && api.novels.isPublic(n));
-    app.innerHTML = `<header class="profile-head"><span class="avatar lg" aria-hidden="true">${esc(initials(u.name))}</span><div><h1>${esc(u.name)}</h1><div class="h">@${esc(u.username)} · joined ${esc(fmtDate(u.created_at))}</div><p class="bio">${esc(u.bio) || (mine ? 'Add a short bio so readers know who you are.' : '')}</p></div>${mine ? '<button class="btn btn-ghost btn-sm" id="editProfile">Edit profile</button><button class="btn btn-soft btn-sm" id="logoutBtn">Log out</button>' : ''}</header>
+    const favs = api.favorites.forUser(u.id); const friends = api.friends.list(u.id);
+    const fs = me && !mine ? api.friends.status(me.id, u.id) : 'none';
+    const actions = mine ? '<button class="btn btn-ghost btn-sm" id="editProfile">Edit profile</button><button class="btn btn-soft btn-sm" id="logoutBtn">Log out</button>'
+      : fs === 'friends' ? '<span class="fr-state">✓ Friends</span><button class="btn btn-ghost btn-sm" data-fr="remove">Remove friend</button>'
+      : fs === 'outgoing' ? '<span class="fr-state">Friend request sent</span><button class="btn btn-ghost btn-sm" data-fr="remove">Cancel request</button>'
+      : fs === 'incoming' ? '<button class="btn btn-primary btn-sm" data-fr="accept">Accept friend request</button><button class="btn btn-ghost btn-sm" data-fr="remove">Decline</button>'
+      : '<button class="btn btn-primary btn-sm" data-fr="request">Add friend</button>';
+    app.innerHTML = `<header class="profile-head"><span class="avatar lg" aria-hidden="true">${esc(initials(u.name))}</span><div><h1>${esc(u.name)}</h1><div class="h">@${esc(u.username)} · joined ${esc(fmtDate(u.created_at))}</div><p class="bio">${esc(u.bio) || (mine ? 'Add a short bio so readers know who you are.' : '')}</p></div><div class="row profile-actions">${actions}</div></header>
       <div id="profileEdit"></div>
+      <section class="section"><div class="section-head"><h2>Friends<span class="sub">${friends.length}</span></h2></div>${friends.length ? `<ul class="friend-chips">${friends.map((f) => `<li><a href="#/u/${esc(f.username)}"><span class="avatar" aria-hidden="true">${esc(initials(f.name))}</span>${esc(f.name)}</a></li>`).join('')}</ul>` : `<div class="empty"><h3>No friends yet</h3><p>${mine ? 'Open someone’s profile and choose Add friend.' : 'Send a friend request to be the first.'}</p></div>`}</section>
+      <section class="section"><div class="section-head"><h2>Favorites<span class="sub">${favs.length}</span></h2></div><div class="grid">${favs.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>No favorites yet</h3><p>${mine ? 'Choose Favorite on a series page to keep it here.' : 'Nothing favorited yet.'}</p></div>`}</div></section>
       <section class="section"><div class="section-head"><h2>${mine ? 'Your series' : `Series by ${esc(u.name)}`}</h2></div><div class="grid">${published.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>Nothing published yet</h3><p>${mine ? 'Series you publish show up here.' : 'Check back later.'}</p>${mine ? '<a class="btn btn-sm" href="#/studio">Open Studio</a>' : ''}</div>`}</div></section>
       <section class="section"><div class="section-head"><h2>Subscriptions<span class="sub">${subs.length}</span></h2></div><div class="grid">${subs.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>No subscriptions yet</h3><p>Subscribe to a series and new chapters will show up in your notifications.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div>`}</div></section>`;
     $('#logoutBtn')?.addEventListener('click', () => { auth.logout(); toast('Logged out'); go('/'); });
+    $$('[data-fr]', app).forEach((b) => b.addEventListener('click', async () => {
+      if (!requireAuth()) return;
+      const act = b.dataset.fr;
+      if (act === 'request') { await api.friends.request(me.id, u.id); toast(`Friend request sent to ${u.name}`); }
+      if (act === 'accept') { await api.friends.accept(me.id, u.id); toast(`You and ${u.name} are now friends`); }
+      if (act === 'remove') { const label = fs === 'friends' ? `Remove ${u.name} from your friends?` : null; if (label && !confirm(label)) return; await api.friends.remove(me.id, u.id); toast(fs === 'friends' ? 'Friend removed' : fs === 'incoming' ? 'Friend request declined' : 'Friend request canceled'); }
+      render();
+    }));
     $('#editProfile')?.addEventListener('click', () => {
       $('#profileEdit').innerHTML = `<form class="card" id="pf" style="max-width:520px;margin-bottom:8px"><div class="field"><label for="pf_name">Display name</label><input class="input" id="pf_name" value="${esc(u.name)}" required></div><div class="field"><label for="pf_bio">Bio</label><textarea class="textarea" id="pf_bio" maxlength="280">${esc(u.bio)}</textarea></div><div class="row"><button class="btn" type="submit">Save changes</button><button class="btn btn-ghost" type="button" id="pfCancel">Cancel</button></div></form>`;
       $('#pfCancel').addEventListener('click', () => { $('#profileEdit').innerHTML = ''; });
@@ -664,8 +870,15 @@
     if (!requireAuth('/notifications')) return;
     setTitle('Notifications'); const me = auth.current();
     const list = api.notifications.forUser(me.id);
-    app.innerHTML = `<div class="studio-head"><div><h1>Notifications</h1><p class="lead">New chapters from series you subscribe to.</p></div></div>
+    const reqs = api.friends.incoming(me.id).map((r) => api.users.byId(r.from)).filter(Boolean);
+    app.innerHTML = `<div class="studio-head"><div><h1>Notifications</h1><p class="lead">Friend requests and new chapters from series you subscribe to.</p></div></div>
+      ${reqs.length ? `<ul class="req-list" id="reqList">${reqs.map((u) => `<li class="fr fr-req">${userLink(u)}<div class="fr-main"><a class="fr-name" href="#/u/${esc(u.username)}">${esc(u.name)}</a><div class="fr-act">Wants to be friends</div><div class="row fr-btns"><button class="btn btn-primary btn-sm" data-accept="${u.id}">Accept</button><button class="btn btn-ghost btn-sm" data-decline="${u.id}">Decline</button></div></div></li>`).join('')}</ul>` : ''}
       <ul class="notif">${list.map((x) => { const n = api.novels.byId(x.novel_id); const c = api.chapters.byId(x.chapter_id); if (!n || !c) return ''; const a = api.users.byId(n.author_id); const i = api.novels.published(n.id).indexOf(c); return `<li class="${x.read_at ? '' : 'unread'}"><a href="#/novel/${esc(n.slug)}">${thumb(n, { sm: true, badge: false })}</a><div><a class="t" href="#/novel/${esc(n.slug)}/ch/${i + 1}">${esc(a.name)} posted Chapter ${c.chapter_number} of ${esc(n.title)}: ${esc(c.title)}</a><div class="m">${esc(timeAgo(x.created_at))}</div></div></li>`; }).join('') || `<li style="display:block;padding:0"><div class="empty"><h3>Nothing yet</h3><p>Subscribe to a series and you will hear about every new chapter here.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div></li>`}</ul>`;
+    $('#reqList')?.addEventListener('click', async (e) => {
+      const acc = e.target.closest('[data-accept]'); const dec = e.target.closest('[data-decline]');
+      if (acc) { await api.friends.accept(me.id, acc.dataset.accept); toast(`You and ${api.users.byId(acc.dataset.accept).name} are now friends`); render(); }
+      if (dec) { await api.friends.remove(me.id, dec.dataset.decline); toast('Friend request declined'); render(); }
+    });
     await api.notifications.markAllRead(me.id); renderShell();
   });
 
@@ -779,7 +992,14 @@
 
   /* Boot --------------------------------------------------------------------- */
   async function init() {
-    db = load(); if (!db || db.version !== 2) { db = await seed(); save(); }
+    db = load(); if (!db || db.version !== 2) { db = await seed(); save(); } else {
+      seedSocial(db);
+      // Move saved demo accounts from the old shared password to the new one; a password the user set themselves is left alone.
+      const demo = db.users.find((u) => u.id === 'u_demo');
+      if (demo && demo.password_hash === (await sha256('chapterhouse'))) demo.password_hash = await sha256(DEMO_PASSWORD);
+      if (demo && /demo \/ chapterhouse/.test(demo.bio || '')) demo.bio = demo.bio.replace('demo / chapterhouse', `demo / ${DEMO_PASSWORD}`);
+      save();
+    }
     $('#searchForm').addEventListener('submit', (e) => { e.preventDefault(); const q = $('#searchInput').value.trim(); go(q ? `/browse?q=${encodeURIComponent(q)}` : '/browse'); });
     window.addEventListener('hashchange', render);
     if (!location.hash) location.hash = '#/';
