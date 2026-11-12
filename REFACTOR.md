@@ -1,4 +1,4 @@
-# Chapterhouse v2 — refactoring to a Webtoon-style serial novel platform
+# Chapterhouse v2 — refactoring to a novel platform
 
 This guide walks through turning the v1 codebase (Next.js + Tailwind + Prisma/PostgreSQL, or
 Supabase) into an episodic, mobile-first serial platform. It starts with the database and works
