@@ -1,6 +1,3 @@
-// ==========================================
-// 1. SUPABASE CONFIGURATION & INITIALIZATION
-// ==========================================
 const SUPABASE_URL = 'https://roeibtcsrgegskslvlbd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_4g7D5_4SCj2GiEgue6fbgg_veUSxtmq';
 
