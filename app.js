@@ -1,25 +1,26 @@
 const SUPABASE_URL = 'https://roeibtcsrgegskslvlbd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_4g7D5_4SCj2GiEgue6fbgg_veUSxtmq';
 
-// Initialize the Supabase client
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Safely initialize Supabase to prevent duplicate declaration errors
+window.supabaseClient = window.supabaseClient || window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = window.supabaseClient;
 
-// Global array to store fetched data for local searching/filtering
-let allScholarships = [];
+// Global array to store fetched stories for local search filtering
+let allStories = [];
 
 
 // ==========================================
 // 2. DOM CONTENT LOADED & INITIAL FETCH
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
-  // Fetch and display scholarships as soon as the page loads
-  fetchScholarships();
+  // Fetch and display stories as soon as the page loads
+  fetchStories();
 
-  // Set up real-time search input listener
-  const searchInput = document.getElementById('search-input');
+  // Set up real-time search input listener matching your HTML input ID (#searchInput)
+  const searchInput = document.getElementById('searchInput');
   if (searchInput) {
     searchInput.addEventListener('input', (e) => {
-      filterScholarships(e.target.value);
+      filterStories(e.target.value);
     });
   }
 });
@@ -30,27 +31,27 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================
 
 /**
- * Fetches all scholarship records from the Supabase database.
+ * Fetches all story records from the Supabase 'stories' table.
  */
-async function fetchScholarships() {
+async function fetchStories() {
   try {
     const { data, error } = await supabase
-      .from('scholarships')
+      .from('stories')
       .select('*')
-      .order('deadline', { ascending: true }); // Automatically sorts by closest deadline
+      .order('created_at', { ascending: false }); // Newest stories first
 
     if (error) {
-      console.error('Error fetching scholarships:', error.message);
-      showErrorState('Failed to load scholarships. Please try again later.');
+      console.error('Error fetching stories:', error.message);
+      showErrorState('Failed to load stories. Please try again later.');
       return;
     }
 
     // Save data globally and render everything initially
-    allScholarships = data || [];
-    renderScholarships(allScholarships);
+    allStories = data || [];
+    renderStories(allStories);
   } catch (err) {
     console.error('An unexpected error occurred:', err);
-    showErrorState('An unexpected error occurred while loading scholarships.');
+    showErrorState('An unexpected error occurred while loading stories.');
   }
 }
 
@@ -60,59 +61,67 @@ async function fetchScholarships() {
 // ==========================================
 
 /**
- * Filters scholarships based on the search query across title, provider, and description.
+ * Filters stories based on the search query across title, author, and content.
  */
-function filterScholarships(query) {
+function filterStories(query) {
   const searchTerm = query.toLowerCase().trim();
 
-  const filtered = allScholarships.filter(s => {
-    const title = (s.title || '').toLowerCase();
-    const provider = (s.provider || '').toLowerCase();
-    const description = (s.description || '').toLowerCase();
+  const filtered = allStories.filter(story => {
+    const title = (story.title || '').toLowerCase();
+    const author = (story.author || '').toLowerCase();
+    const content = (story.content || '').toLowerCase();
 
     return title.includes(searchTerm) || 
-           provider.includes(searchTerm) || 
-           description.includes(searchTerm);
+           author.includes(searchTerm) || 
+           content.includes(searchTerm);
   });
 
-  renderScholarships(filtered);
+  renderStories(filtered);
 }
 
 /**
- * Renders an array of scholarship objects into the webpage DOM.
- * @param {Array} scholarships - List of scholarship records to render
+ * Renders an array of story objects into the webpage DOM.
+ * @param {Array} stories - List of story records to render
  */
-function renderScholarships(scholarships) {
-  const container = document.getElementById('scholarships-container');
-  if (!container) {
-    console.warn('Element with ID "scholarships-container" not found in index.html.');
-    return;
+function renderStories(stories) {
+  const container = document.getElementById('stories-container') || document.getElementById('app');
+  if (!container) return;
+
+  // Clear previous content or create container if missing
+  let targetContainer = document.getElementById('stories-container');
+  if (!targetContainer) {
+    targetContainer = document.createElement('div');
+    targetContainer.id = 'stories-container';
+    container.appendChild(targetContainer);
   }
 
-  // Clear previous content
-  container.innerHTML = '';
+  targetContainer.innerHTML = '';
 
   // Handle empty state
-  if (!scholarships || scholarships.length === 0) {
-    container.innerHTML = `<p class="no-results">No scholarships found matching your search.</p>`;
+  if (!stories || stories.length === 0) {
+    targetContainer.innerHTML = `<p class="no-results">No stories found matching your search.</p>`;
     return;
   }
 
-  // Loop through each scholarship and create a visual card
-  scholarships.forEach(s => {
+  // Loop through each story and create a visual card
+  stories.forEach(story => {
     const card = document.createElement('div');
-    card.className = 'scholarship-card';
+    card.className = 'story-card';
+
+    // Format tags array nicely if available
+    const tagsHtml = story.tags && story.tags.length > 0 
+      ? `<p class="story-tags"><strong>Tags:</strong> ${story.tags.join(', ')}</p>` 
+      : '';
 
     card.innerHTML = `
-      <h3>${escapeHtml(s.title)}</h3>
-      <p class="scholarship-provider"><strong>Provider:</strong> ${escapeHtml(s.provider || 'N/A')}</p>
-      <p class="scholarship-amount"><strong>Amount:</strong> ${escapeHtml(s.amount || 'Varies')}</p>
-      <p class="scholarship-deadline"><strong>Deadline:</strong> ${formatDate(s.deadline)}</p>
-      <p class="scholarship-description">${escapeHtml(s.description || '')}</p>
-      ${s.link ? `<a href="${escapeHtml(s.link)}" class="apply-btn" target="_blank" rel="noopener noreferrer">Apply Now</a>` : ''}
+      <h3 class="story-title">${escapeHtml(story.title)}</h3>
+      <p class="story-author"><strong>Author:</strong> ${escapeHtml(story.author || 'Anonymous')}</p>
+      <p class="story-date"><strong>Published:</strong> ${formatDate(story.created_at)}</p>
+      <p class="story-excerpt">${escapeHtml(story.content ? story.content.substring(0, 150) + '...' : '')}</p>
+      ${tagsHtml}
     `;
 
-    container.appendChild(card);
+    targetContainer.appendChild(card);
   });
 }
 
@@ -120,7 +129,7 @@ function renderScholarships(scholarships) {
  * Displays an error message inside the container if the fetch fails.
  */
 function showErrorState(message) {
-  const container = document.getElementById('scholarships-container');
+  const container = document.getElementById('stories-container') || document.getElementById('app');
   if (container) {
     container.innerHTML = `<p class="error-message">${escapeHtml(message)}</p>`;
   }
@@ -132,10 +141,10 @@ function showErrorState(message) {
 // ==========================================
 
 /**
- * Formats a date string into a clean, readable format.
+ * Formats a timestamp into a clean, readable date string.
  */
 function formatDate(dateString) {
-  if (!dateString) return 'Open / TBD';
+  if (!dateString) return 'Recently';
   const options = { year: 'numeric', month: 'short', day: 'numeric' };
   return new Date(dateString).toLocaleDateString(undefined, options);
 }
