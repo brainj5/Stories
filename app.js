@@ -3,7 +3,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_4g7D5_4SCj2GiEgue6fbgg_veUSxtmq';
 
 // Safely initialize Supabase to prevent duplicate declaration errors
 window.supabaseClient = window.supabaseClient || window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const supabase = window.supabaseClient;
+const DB = window.supabaseClient;
 
 // Global array to store fetched stories for local search filtering
 let allStories = [];
@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 async function fetchStories() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await DB
       .from('stories')
       .select('*')
       .order('created_at', { ascending: false }); // Newest stories first
