@@ -3,7 +3,7 @@
 // ==========================================
 // Replace these placeholder values with your actual Supabase Project URL and Anon Key from your dashboard settings
 const SUPABASE_URL = 'https://roeibtcsrgegskslvlbd.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_4g7D5_4SCj2GiEgue6fbgg_veUSxtmq;
+const SUPABASE_ANON_KEY = 'sb_publishable_4g7D5_4SCj2GiEgue6fbgg_veUSxtmq';
 
 // Initialize the Supabase client
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
