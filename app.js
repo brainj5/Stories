@@ -1,12 +1,14 @@
 // ==========================================
 // 1. SUPABASE CONFIGURATION & INITIALIZATION
 // ==========================================
-// Replace these placeholder values with your actual Supabase Project URL and Anon Key from your dashboard settings
 const SUPABASE_URL = 'https://roeibtcsrgegskslvlbd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_4g7D5_4SCj2GiEgue6fbgg_veUSxtmq';
 
 // Initialize the Supabase client
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Global array to store fetched data for local searching/filtering
+let allScholarships = [];
 
 
 // ==========================================
@@ -16,7 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Fetch and display scholarships as soon as the page loads
   fetchScholarships();
 
-  // Optional: Set up real-time search input listener if you have a search bar in your HTML
+  // Set up real-time search input listener
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.addEventListener('input', (e) => {
@@ -46,21 +48,42 @@ async function fetchScholarships() {
       return;
     }
 
-    // Pass the retrieved data to the rendering function
-    renderScholarships(data);
+    // Save data globally and render everything initially
+    allScholarships = data || [];
+    renderScholarships(allScholarships);
   } catch (err) {
     console.error('An unexpected error occurred:', err);
+    showErrorState('An unexpected error occurred while loading scholarships.');
   }
 }
 
 
 // ==========================================
-// 4. RENDERING & UI FUNCTIONS
+// 4. RENDERING & FILTERING FUNCTIONS
 // ==========================================
 
 /**
+ * Filters scholarships based on the search query across title, provider, and description.
+ */
+function filterScholarships(query) {
+  const searchTerm = query.toLowerCase().trim();
+
+  const filtered = allScholarships.filter(s => {
+    const title = (s.title || '').toLowerCase();
+    const provider = (s.provider || '').toLowerCase();
+    const description = (s.description || '').toLowerCase();
+
+    return title.includes(searchTerm) || 
+           provider.includes(searchTerm) || 
+           description.includes(searchTerm);
+  });
+
+  renderScholarships(filtered);
+}
+
+/**
  * Renders an array of scholarship objects into the webpage DOM.
- * @param {Array} scholarships - List of scholarship records from Supabase
+ * @param {Array} scholarships - List of scholarship records to render
  */
 function renderScholarships(scholarships) {
   const container = document.getElementById('scholarships-container');
@@ -74,7 +97,7 @@ function renderScholarships(scholarships) {
 
   // Handle empty state
   if (!scholarships || scholarships.length === 0) {
-    container.innerHTML = `<p class="no-results">No scholarships found at this time.</p>`;
+    container.innerHTML = `<p class="no-results">No scholarships found matching your search.</p>`;
     return;
   }
 
