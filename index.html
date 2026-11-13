@@ -32,16 +32,21 @@
     <div class="account" id="accountMenu"></div>
   </header>
 
-  <main id="app" class="app" tabindex="-1"></main>
+  <!-- Main container where stories from Supabase will render -->
+  <main id="app" class="app" tabindex="-1">
+    <div id="stories-container"></div>
+  </main>
 
   <footer class="footer">
-    <span>Chapterhouse prototype. Demo data stays in this browser.</span>
+    <span>Chapterhouse prototype. Connected to Supabase.</span>
   </footer>
 
   <div class="toast-stack" id="toasts" aria-live="polite"></div>
 
+  <!-- Supabase JavaScript SDK CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   
+  <!-- Your custom application script -->
   <script src="app.js"></script>
 </body>
 </html>
