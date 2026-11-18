@@ -495,3 +495,8 @@ body.reading .app { max-width: none; padding-bottom: 0; }
 
 .page { padding: 28px 0; max-width: 70ch; }
 .page h1 { margin-bottom: 10px; }
+
+/* Official account badge */
+.official { display: inline-flex; vertical-align: -0.12em; margin-left: 0.25em; color: var(--ultra, #2b3be8); }
+.official svg { width: 1em; height: 1em; display: block; }
+h1 .official { vertical-align: -0.08em; }
