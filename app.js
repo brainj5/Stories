@@ -841,22 +841,36 @@
   });
 
   const COMMUNITY_RULES = [
-    'Stories From Beyond community rules',
-    '',
-    '1. Only publish work you wrote yourself.',
-    '2. Use genres and tags that honestly describe your story, and mention mature themes in the synopsis.',
-    '3. No sexual content involving minors, no hate speech, no harassment, and nothing illegal.',
-    '4. Be respectful to other writers and readers in the comments.',
-    '5. Breaking these rules can get stories removed or your account suspended.',
-    '',
-    'Press OK to agree.',
-  ].join('\n');
+    'Only publish work you wrote yourself.',
+    'Use genres and tags that honestly describe your story, and mention mature themes in the synopsis.',
+    'No sexual content involving minors, no hate speech, no harassment, and nothing illegal.',
+    'Be respectful to other writers and readers in the comments.',
+    'Breaking these rules can get stories removed or your account suspended.',
+  ];
+
+  /** Show the community rules in an on-page window. Resolves true if the writer agrees. */
+  function askRules() {
+    return new Promise((resolve) => {
+      const d = document.createElement('dialog');
+      d.className = 'rules-dialog';
+      d.setAttribute('aria-labelledby', 'rulesTitle');
+      d.innerHTML = `<form method="dialog" class="rd-in">
+        <h2 id="rulesTitle">Community rules</h2>
+        <p class="muted">Before your first publish, please read and agree to these.</p>
+        <ol>${COMMUNITY_RULES.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>
+        <div class="rd-actions"><button class="btn btn-ghost" value="no">Not now</button><button class="btn btn-primary" value="yes" autofocus>I agree</button></div>
+      </form>`;
+      document.body.appendChild(d);
+      d.addEventListener('close', () => { const ok = d.returnValue === 'yes'; d.remove(); resolve(ok); });
+      d.showModal();
+    });
+  }
 
   /** Ask the database whether this writer may publish (bans, rules, new-account wait). The database enforces the same check. */
   async function checkCanPublish() {
     let res = await must(sb.rpc('publish_check'));
     if (res && res.code === 'rules') {
-      if (!confirm(COMMUNITY_RULES)) { toast('You need to agree to the community rules before publishing.'); return false; }
+      if (!(await askRules())) { toast('You need to agree to the community rules before publishing.'); return false; }
       await must(sb.rpc('accept_rules'));
       res = await must(sb.rpc('publish_check'));
     }
