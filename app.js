@@ -36,6 +36,25 @@
     $('#toasts').appendChild(el); setTimeout(() => el.remove(), link ? 7000 : 3200);
   }
 
+  /* Site theme: 'light' | 'dark' | 'system', saved in this browser. index.html applies it before paint. */
+  const THEME_KEY = 'sfb.theme';
+  const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['system', 'System']];
+  const darkQuery = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+  const theme = {
+    get() { try { const v = localStorage.getItem(THEME_KEY); return THEMES.some(([k]) => k === v) ? v : 'light'; } catch { return 'light'; } },
+    apply() {
+      const pref = theme.get();
+      const dark = pref === 'dark' || (pref === 'system' && !!darkQuery?.matches);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      $('meta[name="theme-color"]')?.setAttribute('content', dark ? '#141519' : '#ffffff');
+      $$('[data-theme-choice]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeChoice === pref)));
+    },
+    set(pref) { try { localStorage.setItem(THEME_KEY, pref); } catch {} theme.apply(); },
+  };
+  darkQuery?.addEventListener?.('change', () => { if (theme.get() === 'system') theme.apply(); });
+  /** Light / Dark / System buttons. labelId names the element that labels the group. */
+  const themeSeg = (labelId) => { const cur = theme.get(); return `<div class="theme-seg" role="group" aria-labelledby="${labelId}">${THEMES.map(([k, label]) => `<button type="button" data-theme-choice="${k}" aria-pressed="${k === cur}">${label}</button>`).join('')}</div>`; };
+
   const ALLOWED = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'H2', 'H3', 'BLOCKQUOTE', 'HR', 'UL', 'OL', 'LI']);
   function sanitize(html) {
     const root = document.createElement('div'); root.innerHTML = html || '';
@@ -318,6 +337,8 @@
       sessionUid = data.user.id; await loadAll(); await ensureProfile(data.user); return auth.current();
     },
     async logout() { sessionUid = null; await sb.auth.signOut(); await loadAll(); },
+    /** Ends the session on every device, this one included. */
+    async logoutEverywhere() { const { error } = await sb.auth.signOut({ scope: 'global' }); if (error) throw new Error(error.message); sessionUid = null; await loadAll(); },
   };
 
   /* 5. Router + shell ----------------------------------------------------- */
@@ -346,12 +367,58 @@
     const unread = u ? api.notifications.unread(u.id) + api.friends.incoming(u.id).length : 0;
     $('#accountMenu').innerHTML = u
       ? `<a class="bell" href="#/notifications" aria-label="Notifications${unread ? `, ${unread} unread` : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>${unread ? `<span class="dot">${unread > 9 ? '9+' : unread}</span>` : ''}</a>
-         <a class="avatar" href="#/u/${esc(u.username)}" aria-label="Your profile">${esc(initials(u.name))}</a>`
+         <button type="button" class="avatar am-btn" id="amBtn" aria-haspopup="true" aria-expanded="false" aria-controls="amPanel" aria-label="Account menu">${esc(initials(u.name))}</button>
+         <div class="am-panel" id="amPanel" hidden>
+           <a class="am-item am-profile" href="#/u/${esc(u.username)}"><span class="avatar" aria-hidden="true">${esc(initials(u.name))}</span><span class="am-who"><span class="am-name">${nm(u)}</span><span class="am-sub">View profile</span></span></a>
+           <div class="am-div" role="separator"></div>
+           <a class="am-item" href="#/settings">Settings</a>
+           <div class="am-theme"><span id="amThemeLbl">Theme</span>${themeSeg('amThemeLbl')}</div>
+           <a class="am-item" href="#/help">Help &amp; safety</a>
+           <button type="button" class="am-item" data-am="switch">Switch account</button>
+           <div class="am-div" role="separator"></div>
+           <button type="button" class="am-item am-danger" data-am="logout">Sign out</button>
+         </div>`
       : `<a class="btn btn-ghost btn-sm" href="#/login">Log in</a><a class="btn btn-sm" href="#/signup">Sign up</a>`;
     $$('[data-auth="in"]').forEach((el) => { el.style.display = u ? '' : 'none'; });
     $$('.topnav a').forEach((a) => { const h = a.getAttribute('href').slice(1); a.classList.toggle('active', h === '/' ? path === '/' : path.startsWith(h)); });
   }
   function requireAuth(next) { if (auth.current()) return true; go('/login?next=' + encodeURIComponent(next || parseHash().path)); return false; }
+
+  /** Account menu: opens from the avatar, closes on outside click, Escape, Tab away or navigation. */
+  const menu = {
+    panel: () => $('#amPanel'),
+    items: () => $$('#amPanel a, #amPanel button'),
+    isOpen: () => !!menu.panel() && !menu.panel().hidden,
+    open() { const p = menu.panel(); if (!p) return; p.hidden = false; $('#amBtn').setAttribute('aria-expanded', 'true'); menu.items()[0]?.focus(); },
+    close(returnFocus) { if (!menu.isOpen()) return; menu.panel().hidden = true; $('#amBtn').setAttribute('aria-expanded', 'false'); if (returnFocus) $('#amBtn').focus(); },
+    toggle() { if (menu.isOpen()) menu.close(false); else menu.open(); },
+  };
+  async function signOut(next) {
+    menu.close(false); await auth.logout();
+    toast(next ? 'Signed out. Log in with the other account.' : 'Signed out');
+    const target = next || '/';
+    if (parseHash().path === target) render(); else go(target);
+  }
+  function initAccountMenu() {
+    document.addEventListener('click', async (e) => {
+      const choice = e.target.closest('[data-theme-choice]');
+      if (choice) { theme.set(choice.dataset.themeChoice); return; }
+      if (e.target.closest('#amBtn')) { menu.toggle(); return; }
+      const act = e.target.closest('[data-am]');
+      if (act) { await signOut(act.dataset.am === 'switch' ? '/login' : null); return; }
+      if (e.target.closest('#amPanel a')) { menu.close(false); return; }
+      if (menu.isOpen() && !e.target.closest('#amPanel')) menu.close(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!menu.isOpen()) return;
+      if (e.key === 'Escape') { e.preventDefault(); menu.close(true); return; }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const items = menu.items(); const i = items.indexOf(document.activeElement);
+      items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+    });
+    $('#accountMenu').addEventListener('focusout', (e) => { if (menu.isOpen() && !$('#accountMenu').contains(e.relatedTarget) && e.relatedTarget) menu.close(false); });
+  }
 
   /* 6. Partials ------------------------------------------------------------ */
   const thumb = (n, { sm = false, badge = true } = {}) => {
@@ -943,6 +1010,83 @@
     cleanup = () => { window.onbeforeunload = null; document.removeEventListener('keydown', onKey); if (dirty) saveDraft(false); };
   });
 
+  /* 6k. Settings ------------------------------------------------------------ */
+  route('/settings', async ({ app }) => {
+    if (!requireAuth('/settings')) return;
+    setTitle('Settings'); const me = auth.current();
+    const { data } = await sb.auth.getUser(); const email = data?.user?.email || '';
+    app.innerHTML = `<div class="settings">
+      <header class="studio-head"><div><h1>Settings</h1><p class="lead">Appearance, sign-in and security.</p></div></header>
+      <section class="card"><h2>Appearance</h2>
+        <div class="set-row"><div><div class="set-t" id="stThemeLbl">Theme</div><p class="hint">System matches your device’s light or dark setting. Saved in this browser.</p></div>${themeSeg('stThemeLbl')}</div></section>
+      <section class="card"><h2>Profile</h2>
+        <div class="set-row"><div><div class="set-t">${nm(me)}</div><p class="hint">@${esc(me.username)}. Your display name and bio are edited on your profile.</p></div><a class="btn btn-ghost btn-sm" href="#/u/${esc(me.username)}">Edit profile</a></div></section>
+      <section class="card"><h2>Email</h2>
+        <form id="emailForm" novalidate>
+          <div class="field"><label for="st_email">New email</label><input class="input" id="st_email" type="email" autocomplete="email" required><span class="hint">Currently ${esc(email) || 'unknown'}. We send a link to confirm the new address before it changes.</span></div>
+          <div class="form-error" id="emailErr" role="alert"></div><div class="form-note" id="emailNote" role="status"></div>
+          <button class="btn btn-sm" type="submit">Change email</button></form></section>
+      <section class="card"><h2>Password</h2>
+        <form id="pwForm" novalidate>
+          <div class="field"><label for="st_pw_cur">Current password</label><input class="input" id="st_pw_cur" type="password" autocomplete="current-password" required></div>
+          <div class="field"><label for="st_pw_new">New password</label><input class="input" id="st_pw_new" type="password" autocomplete="new-password" required><span class="hint">At least 8 characters.</span></div>
+          <div class="field"><label for="st_pw_again">Confirm new password</label><input class="input" id="st_pw_again" type="password" autocomplete="new-password" required></div>
+          <div class="form-error" id="pwErr" role="alert"></div>
+          <button class="btn btn-sm" type="submit">Change password</button></form></section>
+      <section class="card"><h2>Sessions</h2>
+        <div class="set-row"><div><div class="set-t">Sign out everywhere</div><p class="hint">Ends your session on every device, this one included. Use it if you signed in on a computer that isn’t yours.</p></div><button class="btn btn-ghost btn-sm" id="signOutAll">Sign out everywhere</button></div></section>
+    </div>`;
+
+    $('#emailForm').addEventListener('submit', async (e) => {
+      e.preventDefault(); const btn = e.submitter; $('#emailErr').textContent = ''; $('#emailNote').textContent = '';
+      const next = $('#st_email').value.trim();
+      if (!/^\S+@\S+\.\S+$/.test(next)) { $('#emailErr').textContent = 'Enter a valid email address.'; return; }
+      if (next.toLowerCase() === email.toLowerCase()) { $('#emailErr').textContent = 'That is already your email.'; return; }
+      if (btn) btn.disabled = true;
+      try {
+        const { error } = await sb.auth.updateUser({ email: next }, { emailRedirectTo: location.origin + location.pathname });
+        if (error) throw new Error(error.message);
+        $('#emailNote').textContent = `Check ${next} for a confirmation link. Your email changes once you open it.`; $('#st_email').value = '';
+      } catch (err) { $('#emailErr').textContent = err.message; } finally { if (btn) btn.disabled = false; }
+    });
+
+    $('#pwForm').addEventListener('submit', async (e) => {
+      e.preventDefault(); const btn = e.submitter; const err = $('#pwErr'); err.textContent = '';
+      const cur = $('#st_pw_cur').value, nxt = $('#st_pw_new').value, again = $('#st_pw_again').value;
+      if (!cur) { err.textContent = 'Enter your current password.'; return; }
+      if (nxt.length < 8) { err.textContent = 'New passwords need at least 8 characters.'; return; }
+      if (nxt !== again) { err.textContent = 'The new passwords don’t match.'; return; }
+      if (nxt === cur) { err.textContent = 'Choose a password you aren’t using now.'; return; }
+      if (btn) btn.disabled = true;
+      try {
+        // Check the current password first, so someone at an unlocked screen can't change it.
+        const check = await sb.auth.signInWithPassword({ email, password: cur });
+        if (check.error) throw new Error('Your current password is wrong.');
+        const { error } = await sb.auth.updateUser({ password: nxt });
+        if (error) throw new Error(error.message);
+        e.target.reset(); toast('Password changed');
+      } catch (x) { err.textContent = x.message; } finally { if (btn) btn.disabled = false; }
+    });
+
+    $('#signOutAll').addEventListener('click', async () => {
+      if (!(await askConfirm('You will need to log in again on every device, including this one.', { title: 'Sign out everywhere?', ok: 'Sign out everywhere' }))) return;
+      await auth.logoutEverywhere(); toast('Signed out on every device'); go('/');
+    });
+  });
+
+  /* 6l. Help & safety -------------------------------------------------------- */
+  route('/help', async ({ app }) => {
+    setTitle('Help & safety');
+    app.innerHTML = `<div class="page help"><h1>Help &amp; safety</h1>
+      <p class="muted">How Stories From Beyond works, and what we expect from everyone on it.</p>
+      <h2>Community rules</h2>
+      <ol>${COMMUNITY_RULES.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>
+      <h2>Your account</h2>
+      <p>Change your theme, email and password in <a href="#/settings">Settings</a>. If you signed in somewhere you shouldn’t have, use <b>Sign out everywhere</b> there.</p>
+      <h2>Comments</h2>
+      <p>You can delete your own comments, and authors can delete any comment on their chapters.</p></div>`;
+  });
+
   /* Boot --------------------------------------------------------------------- */
   async function init() {
     $('#app').innerHTML = '<div class="page"><p class="muted">Loading stories…</p></div>';
@@ -960,6 +1104,9 @@
     window.addEventListener('unhandledrejection', (e) => toast(e.reason?.message || 'Something went wrong. Try again.'));
     $('#searchForm').addEventListener('submit', (e) => { e.preventDefault(); const q = $('#searchInput').value.trim(); go(q ? `/browse?q=${encodeURIComponent(q)}` : '/browse'); });
     window.addEventListener('hashchange', render);
+    initAccountMenu();
+    theme.apply();
+    window.addEventListener('storage', (e) => { if (e.key === THEME_KEY) theme.apply(); }); // theme changed in another tab
     if (!location.hash) location.hash = '#/';
     render();
   }
