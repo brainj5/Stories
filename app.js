@@ -15,6 +15,8 @@
   const wordCount = (h) => (stripHtml(h).trim().match(/\S+/g) || []).length;
   const readMin = (w) => Math.max(1, Math.round(w / 230));
   const initials = (n) => (n || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  const pl = (n, one) => (n === 1 ? one : one + 's'); // word only, for numbers shown with compact()
+  const initial = (t) => ((t || '').match(/[\p{L}\p{N}]/u) || ['?'])[0].toUpperCase(); // first letter or digit, skipping symbols like [
   const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : (many || one + 's')}`;
   const compact = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'K' : String(n);
   const timeAgo = (ts) => {
@@ -101,7 +103,7 @@
       isPublic: (n) => n.status !== 'draft' && api.novels.published(n.id).length > 0,
       listPublic: () => db.novels.filter(api.novels.isPublic),
       byAuthor: (authorId) => db.novels.filter((n) => n.author_id === authorId).sort((a, b) => b.updated_at - a.updated_at),
-      subscribers: (n) => db.subscriptions.filter((s) => s.novel_id === n.id).length + (n.subscriber_offset || 0),
+      subscribers: (n) => (n.subscriber_count || 0) + (n.subscriber_offset || 0),
       stats(n) {
         const chs = api.novels.published(n.id);
         const words = chs.reduce((a, c) => a + wordCount(c.content), 0);
@@ -202,8 +204,18 @@
       has: (userId, novelId) => db.subscriptions.some((s) => s.user_id === userId && s.novel_id === novelId),
       forUser: (userId) => db.subscriptions.filter((s) => s.user_id === userId).sort((a, b) => b.created_at - a.created_at),
       async toggle(userId, novelId) {
-        if (api.subscriptions.has(userId, novelId)) { await must(sb.from('subscriptions').delete().eq('user_id', userId).eq('novel_id', novelId)); db.subscriptions = db.subscriptions.filter((s) => !(s.user_id === userId && s.novel_id === novelId)); return false; }
-        const s = { user_id: userId, novel_id: novelId, created_at: now() }; await must(sb.from('subscriptions').insert(s)); db.subscriptions.push(s); return true;
+        const novel = db.novels.find((x) => x.id === novelId);
+        if (api.subscriptions.has(userId, novelId)) {
+          await must(sb.from('subscriptions').delete().eq('user_id', userId).eq('novel_id', novelId));
+          db.subscriptions = db.subscriptions.filter((s) => !(s.user_id === userId && s.novel_id === novelId));
+          if (novel) novel.subscriber_count = Math.max((novel.subscriber_count || 0) - 1, 0);
+          return false;
+        }
+        const s = { user_id: userId, novel_id: novelId, created_at: now() };
+        await must(sb.from('subscriptions').insert(s));
+        db.subscriptions.push(s);
+        if (novel) novel.subscriber_count = (novel.subscriber_count || 0) + 1;
+        return true;
       },
     },
     notifications: {
@@ -320,6 +332,7 @@
     if (cleanup) { cleanup(); cleanup = null; }
     document.body.classList.remove('reading', 'home');
     const { path, query } = parseHash(); const app = $('#app');
+    const si = $('#searchInput'); if (si && document.activeElement !== si) si.value = path === '/browse' ? (query.q || '') : '';
     for (const r of routes) {
       const m = path.match(r.re);
       if (m) { const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); }); app.innerHTML = ''; await r.handler({ params, query, app }); if (!app.dataset.keepScroll) window.scrollTo(0, 0); delete app.dataset.keepScroll; renderShell(); return; }
@@ -343,9 +356,9 @@
   /* 6. Partials ------------------------------------------------------------ */
   const thumb = (n, { sm = false, badge = true } = {}) => {
     const b = badge ? (api.novels.hasUpToday(n) ? '<span class="badge badge-up">UP</span>' : api.novels.isNew(n) ? '<span class="badge badge-new">NEW</span>' : '') : '';
-    return `<div class="thumb ${sm ? 'sm' : ''} ${n.cover_image ? 'has-image' : ''}" style="--cv:${esc(n.cover_color)};${n.cover_image ? `background-image:url('${esc(n.cover_image)}')` : ''}" aria-hidden="true">${b}${n.cover_image ? '' : `<span class="big">${esc((n.title || 'U')[0])}</span>`}<span class="tt">${esc(n.title || 'Untitled')}</span></div>`;
+    return `<div class="thumb ${sm ? 'sm' : ''} ${n.cover_image ? 'has-image' : ''}" style="--cv:${esc(n.cover_color)};${n.cover_image ? `background-image:url('${esc(n.cover_image)}')` : ''}" aria-hidden="true">${b}${n.cover_image ? '' : `<span class="big">${esc(initial(n.title))}</span>`}<span class="tt">${esc(n.title || 'Untitled')}</span></div>`;
   };
-  const sCard = (n) => { const a = api.users.byId(n.author_id); const st = api.novels.stats(n); return `<a class="s-card" href="#/novel/${esc(n.slug)}">${thumb(n)}<div class="st">${esc(n.title)}</div><div class="sm">${nm(a)} · ${compact(st.subs)} subscribers</div></a>`; };
+  const sCard = (n) => { const a = api.users.byId(n.author_id); const st = api.novels.stats(n); return `<a class="s-card" href="#/novel/${esc(n.slug)}">${thumb(n)}<div class="st">${esc(n.title)}</div><div class="sm">${nm(a)} · ${compact(st.subs)} ${pl(st.subs, 'subscriber')}</div></a>`; };
   const rail = (list) => `<div class="rail">${list.map(sCard).join('')}</div>`;
   const dayLink = (d, sel, today) => `<a href="#/daily/${d}" class="${d === sel ? 'on' : ''} ${d === today ? 'today' : ''}"><span>${DAYS[d]}</span>${d === today ? '<span class="d">today</span>' : ''}</a>`;
 
@@ -369,13 +382,13 @@
       const a = api.users.byId(n.author_id); const st = api.novels.stats(n);
       return `<article class="feat-slide" aria-roledescription="slide" aria-label="${i + 1} of ${picks.length}: ${esc(n.title)}" ${i ? 'hidden' : ''}>
         <a class="feat-art ${n.cover_image ? 'has-image' : ''}" href="#/novel/${esc(n.slug)}" style="--cv:${esc(n.cover_color)};${n.cover_image ? `background-image:url('${esc(n.cover_image)}')` : ''}">
-          <span class="feat-letter" aria-hidden="true">${esc(n.title[0])}</span>
+          <span class="feat-letter" aria-hidden="true">${esc(initial(n.title))}</span>
           <span class="feat-rank">#${i + 1} up and coming</span>
           <span class="feat-title">${esc(n.title)}</span>
         </a>
         <div class="feat-info">
           <div><div class="feat-by">${esc(n.genres[0] || 'Series')} by <a href="#/u/${esc(a.username)}">${nm(a)}</a></div><p>${esc(n.synopsis)}</p></div>
-          <ul class="feat-stats"><li><b>${compact(st.subs)}</b> subscribers</li><li><b>${st.chapters}</b> ${st.chapters === 1 ? 'chapter' : 'chapters'}</li><li><b>${compact(st.likes)}</b> likes</li></ul>
+          <ul class="feat-stats"><li><b>${compact(st.subs)}</b> ${pl(st.subs, 'subscriber')}</li><li><b>${st.chapters}</b> ${st.chapters === 1 ? 'chapter' : 'chapters'}</li><li><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</li></ul>
         </div></article>`;
     };
 
@@ -408,7 +421,7 @@
         const chs = api.novels.published(n.id); const prog = api.progress.get(me.id, n.id); const at = prog ? chs.findIndex((c) => c.id === prog) + 1 : 0;
         const pct = chs.length ? Math.round((at / chs.length) * 100) : 0;
         return `<li class="fav"><a href="#/novel/${esc(n.slug)}" tabindex="-1" aria-hidden="true">${thumb(n, { sm: true })}</a><div class="fav-main"><a class="fav-t" href="#/novel/${esc(n.slug)}">${esc(n.title)}</a>
-          <div class="fav-m">${esc(n.genres[0] || '')}${n.genres[0] ? ', ' : ''}${compact(api.novels.subscribers(n))} subscribers</div>
+          <div class="fav-m">${esc(n.genres[0] || '')}${n.genres[0] ? ', ' : ''}${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}</div>
           <div class="fav-m">${at ? `Read ${at} of ${chs.length}` : `${plural(chs.length, 'chapter')}, not started`}</div>
           <div class="fav-bar" aria-hidden="true"><i style="width:${pct}%"></i></div></div>
           <a class="go" href="#/novel/${esc(n.slug)}/ch/${at && at < chs.length ? at + 1 : Math.max(at, 1)}" aria-label="${at ? 'Continue' : 'Start'} ${esc(n.title)}">${ICON_PLAY}</a></li>`;
@@ -513,7 +526,7 @@
         <div class="series-top">${thumb(n, { badge: false })}
           <div><div class="chip-set" style="margin-bottom:8px">${n.genres.map((g) => `<a class="chip" href="#/browse?genre=${encodeURIComponent(g)}">${esc(g)}</a>`).join('')}</div>
             <h1>${esc(n.title)}</h1><div class="by">by <a href="#/u/${esc(a.username)}">${nm(a)}</a></div>
-            <div class="series-meta"><span><b>${compact(st.subs)}</b> subscribers</span><span><b>${compact(st.views)}</b> views</span><span><b>${compact(st.likes)}</b> likes</span><span>${n.status === 'completed' ? '<b>Completed</b>' : n.update_day === null ? '<b>Ongoing</b>' : `Updates <b>${DAYS_LONG[n.update_day]}s</b>`}</span></div>
+            <div class="series-meta"><span><b>${compact(st.subs)}</b> ${pl(st.subs, 'subscriber')}</span><span><b>${compact(st.views)}</b> ${pl(st.views, 'view')}</span><span><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</span><span>${n.status === 'completed' ? '<b>Completed</b>' : n.update_day === null ? '<b>Ongoing</b>' : `Updates <b>${DAYS_LONG[n.update_day]}s</b>`}</span></div>
             <div class="series-cta">
               ${chs.length ? `<a class="btn btn-primary btn-lg" href="#/novel/${esc(n.slug)}/ch/${progIdx > 0 ? progIdx + 1 : 1}">${progIdx > 0 ? `Continue · Ch. ${progIdx + 1}` : 'Read first chapter'}</a>` : '<span></span>'}
               <button class="btn btn-ghost btn-lg sub-btn" id="subBtn" aria-pressed="${subbed}">${subbed ? '✓ Subscribed' : '+ Subscribe'}</button>
@@ -547,8 +560,8 @@
 
   /* 6e. Reader (continuous scroll) ------------------------------------------ */
   const prefs = {
-    get: () => { try { return { theme: 'light', size: 18, lh: 'normal', font: 'serif', ...JSON.parse(localStorage.getItem('chapterhouse.v2.prefs') || '{}') }; } catch { return { theme: 'light', size: 18, lh: 'normal', font: 'serif' }; } },
-    set: (p) => localStorage.setItem('chapterhouse.v2.prefs', JSON.stringify({ ...prefs.get(), ...p })),
+    get: () => { try { return { theme: 'light', size: 18, lh: 'normal', font: 'serif', ...JSON.parse(localStorage.getItem('sfb.prefs') || localStorage.getItem('chapterhouse.v2.prefs') || '{}') }; } catch { return { theme: 'light', size: 18, lh: 'normal', font: 'serif' }; } },
+    set: (p) => { try { localStorage.setItem('sfb.prefs', JSON.stringify({ ...prefs.get(), ...p })); localStorage.removeItem('chapterhouse.v2.prefs'); } catch {} },
   };
   const LH = { tight: 1.5, normal: 1.7, loose: 1.95 };
 
@@ -596,7 +609,7 @@
     const chapterBlock = (idx) => {
       const c = chs[idx]; const words = wordCount(c.content);
       return `<article class="ep" id="ch-${idx + 1}" data-idx="${idx}">
-        <header class="ep-head"><div class="k">Chapter ${idx + 1} of ${chs.length}</div><h1>${esc(c.title)}</h1><div class="d">${esc(fmtDate(c.published_at))} · ${readMin(words)} min read · ${compact(c.views)} views</div></header>
+        <header class="ep-head"><div class="k">Chapter ${idx + 1} of ${chs.length}</div><h1>${esc(c.title)}</h1><div class="d">${esc(fmtDate(c.published_at))} · ${readMin(words)} min read · ${compact(c.views)} ${pl(c.views, 'view')}</div></header>
         <div class="ep-body">${sanitize(c.content)}</div>
         ${c.author_note ? `<aside class="note"><span class="avatar" aria-hidden="true">${esc(initials(a.name))}</span><div><div class="nh">Author's note</div><div class="nn">${nm(a)}</div><div class="nb">${esc(c.author_note)}</div></div></aside>` : ''}
         <div class="ep-actions">
@@ -772,7 +785,7 @@
     if (!requireAuth('/studio')) return;
     setTitle('Studio'); const me = auth.current(); const list = api.novels.byAuthor(me.id);
     app.innerHTML = `<header class="studio-head"><div><h1>Studio</h1><p class="lead">Your series, drafts and chapters.</p></div><button class="btn btn-primary" id="newNovel">New series</button></header>
-      <ul class="st-rows">${list.map((n) => { const all = api.novels.all(n.id); const pub = all.filter((c) => c.status === 'published'); const live = api.novels.isPublic(n); const drafts = all.length - pub.length; return `<li>${thumb(n, { sm: true, badge: false })}<div><a class="t" href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a><div class="m"><span class="badge ${live ? 'badge-live' : 'badge-draft'}">${live ? (n.status === 'completed' ? 'COMPLETED' : 'LIVE') : 'DRAFT'}</span><span>${pub.length} published${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span><span>${compact(api.novels.subscribers(n))} subscribers</span><span>${n.update_day !== null ? DAYS_LONG[n.update_day] + 's' : 'no release day'}</span></div></div><div class="a"><a class="btn btn-soft btn-sm" href="#/studio/novel/${n.id}">Manage</a>${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View</a>` : ''}</div></li>`; }).join('') || `<li style="display:block"><div class="empty"><h3>Start your first series</h3><p>Create a series, add chapters, publish when ready. Drafts stay private.</p><button class="btn" id="newNovel2">New series</button></div></li>`}</ul>`;
+      <ul class="st-rows">${list.map((n) => { const all = api.novels.all(n.id); const pub = all.filter((c) => c.status === 'published'); const live = api.novels.isPublic(n); const drafts = all.length - pub.length; return `<li>${thumb(n, { sm: true, badge: false })}<div><a class="t" href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a><div class="m"><span class="badge ${live ? 'badge-live' : 'badge-draft'}">${live ? (n.status === 'completed' ? 'COMPLETED' : 'LIVE') : 'DRAFT'}</span><span>${pub.length} published${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span><span>${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}</span><span>${n.update_day !== null ? DAYS_LONG[n.update_day] + 's' : 'no release day'}</span></div></div><div class="a"><a class="btn btn-soft btn-sm" href="#/studio/novel/${n.id}">Manage</a>${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View</a>` : ''}</div></li>`; }).join('') || `<li style="display:block"><div class="empty"><h3>Start your first series</h3><p>Create a series, add chapters, publish when ready. Drafts stay private.</p><button class="btn" id="newNovel2">New series</button></div></li>`}</ul>`;
     const create = async () => { const n = await api.novels.create(me.id); go(`/studio/novel/${n.id}`); };
     $('#newNovel').addEventListener('click', create); $('#newNovel2')?.addEventListener('click', create);
   });
@@ -798,7 +811,7 @@
           <div class="row"><button class="btn" type="submit">Save details</button></div></form>
         <div class="card"><h2>Danger zone</h2><p class="small muted">Deleting removes the series, every chapter, comments and subscriptions. No undo.</p><button class="btn btn-danger btn-sm" id="delNovel">Delete series</button></div>
       </div><div>
-        <div class="pub-state ${live ? 'live' : ''}">${live ? `<b>Live.</b> Readers can find it at <a href="#/novel/${esc(n.slug)}">/novel/${esc(n.slug)}</a>. ${pubCount} of ${plural(chs.length, 'chapter')} published · ${compact(api.novels.subscribers(n))} subscribers.` : n.status !== 'draft' ? '<b>Published, but hidden.</b> No published chapters yet, so readers cannot see it. Publish a chapter to go live.' : '<b>Draft.</b> Only you can see this series. Publishing any chapter makes it live and notifies subscribers.'}</div>
+        <div class="pub-state ${live ? 'live' : ''}">${live ? `<b>Live.</b> Readers can find it at <a href="#/novel/${esc(n.slug)}">/novel/${esc(n.slug)}</a>. ${pubCount} of ${plural(chs.length, 'chapter')} published · ${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}.` : n.status !== 'draft' ? '<b>Published, but hidden.</b> No published chapters yet, so readers cannot see it. Publish a chapter to go live.' : '<b>Draft.</b> Only you can see this series. Publishing any chapter makes it live and notifies subscribers.'}</div>
         <div class="row" style="margin-bottom:14px">${n.status !== 'draft' ? '<button class="btn btn-ghost btn-sm" id="offline">Take offline</button>' : pubCount ? '<button class="btn btn-primary btn-sm" id="pubNovel">Publish series</button>' : ''}${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View public page</a>` : ''}</div>
         <div class="card"><div class="row between" style="margin-bottom:8px"><h2 style="margin:0">Chapters</h2><button class="btn btn-sm" id="newCh">New chapter</button></div>
           <ol class="ep-rows">${chs.map((c, i) => `<li><span class="n">${c.chapter_number}</span><div><a class="t" href="#/studio/novel/${n.id}/ch/${c.id}">${esc(c.title || 'Untitled chapter')}</a><div class="m"><span class="badge ${c.status === 'published' ? 'badge-live' : 'badge-draft'}">${c.status === 'published' ? 'PUBLISHED' : 'DRAFT'}</span><span>${wordCount(c.content).toLocaleString()} words</span>${c.author_note ? '<span>note ✓</span>' : ''}<span>${esc(timeAgo(c.updated_at))}</span></div></div>
@@ -863,7 +876,7 @@
     const badge = () => `<span class="badge ${c.status === 'published' ? 'badge-live' : 'badge-draft'}">${c.status === 'published' ? 'PUBLISHED' : 'DRAFT'}</span>`;
     const markDirty = () => { dirty = true; state.innerHTML = badge() + ' Unsaved changes'; clearTimeout(timer); timer = setTimeout(() => saveDraft(false), 1500); };
     async function saveDraft(announce) { clearTimeout(timer); await api.chapters.update(c.id, { title: title.value.trim(), content: body.innerHTML, author_note: note.value.trim() }); dirty = false; state.innerHTML = badge() + ' Saved just now'; if (announce) toast('Draft saved'); }
-    body.addEventListener('input', () => { words(); markDirty(); }); title.addEventListener('input', markDirty); note.addEventListener('input', () => { words(); markDirty(); });
+    body.addEventListener('input', () => { words(); markDirty(); }); title.addEventListener('input', () => { setTitle(`${title.value.trim() || 'Untitled chapter'} · Editor`); markDirty(); }); note.addEventListener('input', () => { words(); markDirty(); });
     body.addEventListener('paste', (e) => { e.preventDefault(); const t = (e.clipboardData || window.clipboardData).getData('text/plain'); document.execCommand('insertHTML', false, t.split(/\n{2,}/).map((p) => `<p>${esc(p.trim()).replace(/\n/g, '<br>')}</p>`).join('')); });
     document.addEventListener('keydown', onKey);
     function onKey(e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDraft(true); } }
