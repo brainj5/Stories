@@ -840,11 +840,36 @@
     $$('[data-del]').forEach((b) => b.addEventListener('click', async () => { const c = api.chapters.byId(b.dataset.del); if (!confirm(`Delete “${c.title || 'Untitled chapter'}”? Its comments go too.`)) return; await api.chapters.remove(c.id); toast('Chapter deleted'); render(); }));
   });
 
+  const COMMUNITY_RULES = [
+    'Stories From Beyond community rules',
+    '',
+    '1. Only publish work you wrote yourself.',
+    '2. Use genres and tags that honestly describe your story, and mention mature themes in the synopsis.',
+    '3. No sexual content involving minors, no hate speech, no harassment, and nothing illegal.',
+    '4. Be respectful to other writers and readers in the comments.',
+    '5. Breaking these rules can get stories removed or your account suspended.',
+    '',
+    'Press OK to agree.',
+  ].join('\n');
+
+  /** Ask the database whether this writer may publish (bans, rules, new-account wait). The database enforces the same check. */
+  async function checkCanPublish() {
+    let res = await must(sb.rpc('publish_check'));
+    if (res && res.code === 'rules') {
+      if (!confirm(COMMUNITY_RULES)) { toast('You need to agree to the community rules before publishing.'); return false; }
+      await must(sb.rpc('accept_rules'));
+      res = await must(sb.rpc('publish_check'));
+    }
+    if (!res || !res.ok) { toast((res && res.message) || 'You cannot publish right now.'); return false; }
+    return true;
+  }
+
   async function publishChapter(id) {
     const c = api.chapters.byId(id); const n = api.novels.byId(c.novel_id);
     if (!c.title.trim()) { toast('Give the chapter a title before publishing'); return false; }
     if (wordCount(c.content) === 0) { toast('The chapter is empty. Write something first.'); return false; }
     if (!n.title.trim()) { toast('Give the series a title before publishing'); return false; }
+    if (!(await checkCanPublish())) return false;
     const { novel, novelWentLive, notified } = await api.chapters.publish(id);
     const i = api.novels.published(novel.id).findIndex((x) => x.id === id) + 1;
     toast(novelWentLive ? 'Published. Your series is now live for everyone.' : `Chapter published${notified ? `. ${plural(notified, 'subscriber')} notified.` : ''}`, { href: `#/novel/${novel.slug}/ch/${i}`, label: 'Read it' });
