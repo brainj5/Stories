@@ -191,7 +191,7 @@ body.home .app { max-width: 1320px; }
 
 .feat-stage { position: relative; }
 .feat-slide[hidden] { display: none; }
-.feat-art { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; aspect-ratio: 16 / 8; min-height: 230px; padding: clamp(18px, 3vw, 32px); border-radius: 18px; overflow: hidden; background: var(--cv); color: #fff; isolation: isolate; }
+.feat-art { position: relative; width: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; aspect-ratio: 16 / 8; min-height: 230px; padding: clamp(18px, 3vw, 32px); border-radius: 18px; overflow: hidden; background: var(--cv); color: #fff; isolation: isolate; }
 .feat-art.has-image { background-size: cover; background-position: center; }
 .feat-art::before { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(90% 120% at 100% 0%, rgba(255,255,255,.26), transparent 60%), linear-gradient(to top, rgba(0,0,0,.6), transparent 70%); }
 .feat-letter { position: absolute; right: -1%; top: -22%; font-size: clamp(15rem, 30vw, 26rem); font-weight: 800; line-height: 1; letter-spacing: -0.08em; opacity: .16; z-index: -1; pointer-events: none; }
