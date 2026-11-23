@@ -754,7 +754,7 @@
       const act = b.dataset.fr;
       if (act === 'request') { await api.friends.request(me.id, u.id); toast(`Friend request sent to ${u.name}`); }
       if (act === 'accept') { await api.friends.accept(me.id, u.id); toast(`You and ${u.name} are now friends`); }
-      if (act === 'remove') { const label = fs === 'friends' ? `Remove ${u.name} from your friends?` : null; if (label && !confirm(label)) return; await api.friends.remove(me.id, u.id); toast(fs === 'friends' ? 'Friend removed' : fs === 'incoming' ? 'Friend request declined' : 'Friend request canceled'); }
+      if (act === 'remove') { const label = fs === 'friends' ? `Remove ${u.name} from your friends?` : null; if (label && !(await askConfirm(label, { ok: 'Remove friend', danger: true }))) return; await api.friends.remove(me.id, u.id); toast(fs === 'friends' ? 'Friend removed' : fs === 'incoming' ? 'Friend request declined' : 'Friend request canceled'); }
       render();
     }));
     $('#editProfile')?.addEventListener('click', () => {
@@ -831,14 +831,30 @@
       toast('Details saved'); render();
     });
     $('#pubNovel')?.addEventListener('click', async () => { await api.novels.setStatus(n.id, 'ongoing'); toast('Series published', { href: `#/novel/${n.slug}`, label: 'View' }); render(); });
-    $('#offline')?.addEventListener('click', async () => { if (!confirm('Take the series offline? Readers will not see it. Nothing is deleted.')) return; await api.novels.setStatus(n.id, 'draft'); toast('Series is offline'); render(); });
-    $('#delNovel').addEventListener('click', async () => { if (!confirm(`Delete “${n.title || 'Untitled series'}” and all chapters? This cannot be undone.`)) return; await api.novels.remove(n.id); toast('Series deleted'); go('/studio'); });
+    $('#offline')?.addEventListener('click', async () => { if (!(await askConfirm('Readers will not see it. Nothing is deleted.', { title: 'Take the series offline?', ok: 'Take offline' }))) return; await api.novels.setStatus(n.id, 'draft'); toast('Series is offline'); render(); });
+    $('#delNovel').addEventListener('click', async () => { if (!(await askConfirm(`“${n.title || 'Untitled series'}” and all its chapters, comments and subscriptions will be deleted. This cannot be undone.`, { title: 'Delete this series?', ok: 'Delete series', danger: true }))) return; await api.novels.remove(n.id); toast('Series deleted'); go('/studio'); });
     $('#newCh').addEventListener('click', async () => { const c = await api.chapters.create(n.id); go(`/studio/novel/${n.id}/ch/${c.id}`); });
     $$('[data-pub]').forEach((b) => b.addEventListener('click', () => publishChapter(b.dataset.pub)));
     $$('[data-unpub]').forEach((b) => b.addEventListener('click', async () => { await api.chapters.unpublish(b.dataset.unpub); toast('Chapter unpublished'); render(); }));
     $$('[data-move]').forEach((b) => b.addEventListener('click', async () => { await api.chapters.move(b.dataset.id, +b.dataset.move); render(); }));
-    $$('[data-del]').forEach((b) => b.addEventListener('click', async () => { const c = api.chapters.byId(b.dataset.del); if (!confirm(`Delete “${c.title || 'Untitled chapter'}”? Its comments go too.`)) return; await api.chapters.remove(c.id); toast('Chapter deleted'); render(); }));
+    $$('[data-del]').forEach((b) => b.addEventListener('click', async () => { const c = api.chapters.byId(b.dataset.del); if (!(await askConfirm(`“${c.title || 'Untitled chapter'}” and its comments will be deleted. This cannot be undone.`, { title: 'Delete this chapter?', ok: 'Delete chapter', danger: true }))) return; await api.chapters.remove(c.id); toast('Chapter deleted'); render(); }));
   });
+
+  /** On-page yes/no window (browser pop-ups are blocked in some in-app browsers). Resolves true on confirm. */
+  function askConfirm(message, { ok = 'Confirm', cancel = 'Cancel', danger = false, title = 'Are you sure?' } = {}) {
+    return new Promise((resolve) => {
+      const d = document.createElement('dialog');
+      d.className = 'rules-dialog';
+      d.innerHTML = `<form method="dialog" class="rd-in">
+        <h2>${esc(title)}</h2>
+        <p class="muted">${esc(message)}</p>
+        <div class="rd-actions"><button class="btn btn-ghost" value="no" autofocus>${esc(cancel)}</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" value="yes">${esc(ok)}</button></div>
+      </form>`;
+      document.body.appendChild(d);
+      d.addEventListener('close', () => { const yes = d.returnValue === 'yes'; d.remove(); resolve(yes); });
+      d.showModal();
+    });
+  }
 
   const COMMUNITY_RULES = [
     'Only publish work you wrote yourself.',
