@@ -102,6 +102,7 @@
       novels: novels.map((n) => ({ ...n, genres: n.genres || [], tags: n.tags || [] })),
       friendships: friendships.map((f) => ({ ...f, from: f.from_id, to: f.to_id })),
     };
+    try { await gifting.load(); } catch { gifting.ready = false; } // the site still works if gifting.sql hasn't been run
   }
 
   const GENRES = ['Fantasy', 'Romance', 'Mystery', 'Sci-fi', 'Thriller', 'Drama', 'Horror', 'Slice of life', 'Historical', 'Comedy'];
@@ -310,6 +311,55 @@
     },
   };
 
+  /* 3b. Gifting + Ink ------------------------------------------------------
+     Prices, balances and the 60/40 split all live in Supabase (supabase/gifting.sql).
+     The browser only displays them and asks the database to act. */
+  const money = (cents) => '$' + (cents / 100).toFixed(2);
+  const gifting = {
+    ready: false, catalog: [], packs: [], ink: 0, crowned: new Set(),
+    async load() {
+      const [cat, packs, crowns] = await Promise.all([
+        sb.from('gift_catalog').select('*').order('sort'),
+        sb.from('ink_packs').select('*').order('sort'),
+        sb.rpc('crowned_authors'),
+      ]);
+      if (cat.error || packs.error) { gifting.ready = false; return; }
+      gifting.catalog = cat.data || []; gifting.packs = packs.data || [];
+      gifting.crowned = new Set(crowns.error ? [] : (crowns.data || []).map((r) => (typeof r === 'string' ? r : r.crowned_authors)));
+      gifting.ready = gifting.catalog.length > 0;
+      await gifting.refreshWallet();
+    },
+    async refreshWallet() {
+      if (!sessionUid) { gifting.ink = 0; return 0; }
+      const { data } = await sb.from('wallets').select('ink').eq('user_id', sessionUid).maybeSingle();
+      gifting.ink = data?.ink || 0; return gifting.ink;
+    },
+    byId: (id) => gifting.catalog.find((g) => g.id === id),
+    tier: (t) => gifting.catalog.filter((g) => g.tier === t),
+    async send({ giftId, novelId, chapterId, anonymous, note }) {
+      const res = await must(sb.rpc('send_gift', { p_gift: giftId, p_novel: novelId, p_chapter: chapterId || null, p_anonymous: !!anonymous, p_note: note || null }));
+      gifting.ink = res.ink_left;
+      const n = api.novels.byId(novelId); if (n) n.gift_count = (n.gift_count || 0) + 1;
+      const c = chapterId && api.chapters.byId(chapterId); if (c) c.gift_count = (c.gift_count || 0) + 1;
+      if (giftId === 'crown' && n) gifting.crowned.add(n.author_id);
+      return res;
+    },
+    supporters: (novelId) => must(sb.rpc('top_supporters', { p_novel: novelId })),
+    summary: () => must(sb.rpc('my_gift_summary')),
+    lastPurchase: () => must(sb.from('ink_purchases').select('status, ink').order('created_at', { ascending: false }).limit(1).maybeSingle()),
+    /** Ask the server for a Stripe Checkout link, then go there. */
+    async checkout(packId) {
+      const { data, error } = await sb.functions.invoke('create-ink-checkout', { body: { pack: packId } });
+      if (error) {
+        let msg = 'Payments are not available right now. Try again in a moment.';
+        try { const body = await error.context?.json?.(); if (body?.error) msg = body.error; } catch {}
+        throw new Error(msg);
+      }
+      if (!data?.url) throw new Error('Payments are not available right now. Try again in a moment.');
+      location.href = data.url;
+    },
+  };
+
   /* 4. Auth (Supabase Auth: email + password) ------------------------------ */
   /** Make sure a signed-in user has a profile row (the database trigger normally creates it). */
   async function ensureProfile(user) {
@@ -371,6 +421,7 @@
          <div class="am-panel" id="amPanel" hidden>
            <a class="am-item am-profile" href="#/u/${esc(u.username)}"><span class="avatar" aria-hidden="true">${esc(initials(u.name))}</span><span class="am-who"><span class="am-name">${nm(u)}</span><span class="am-sub">View profile</span></span></a>
            <div class="am-div" role="separator"></div>
+           ${gifting.ready ? `<a class="am-item am-ink" href="#/ink"><span>Ink</span><span class="ink-pill">${ICON_DROP}${gifting.ink.toLocaleString()}</span></a>` : ''}
            <a class="am-item" href="#/settings">Settings</a>
            <div class="am-theme"><span id="amThemeLbl">Theme</span>${themeSeg('amThemeLbl')}</div>
            <a class="am-item" href="#/help">Help &amp; safety</a>
@@ -593,24 +644,35 @@
         <div class="series-top">${thumb(n, { badge: false })}
           <div><div class="chip-set" style="margin-bottom:8px">${n.genres.map((g) => `<a class="chip" href="#/browse?genre=${encodeURIComponent(g)}">${esc(g)}</a>`).join('')}</div>
             <h1>${esc(n.title)}</h1><div class="by">by <a href="#/u/${esc(a.username)}">${nm(a)}</a></div>
-            <div class="series-meta"><span><b>${compact(st.subs)}</b> ${pl(st.subs, 'subscriber')}</span><span><b>${compact(st.views)}</b> ${pl(st.views, 'view')}</span><span><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</span><span>${n.status === 'completed' ? '<b>Completed</b>' : n.update_day === null ? '<b>Ongoing</b>' : `Updates <b>${DAYS_LONG[n.update_day]}s</b>`}</span></div>
+            <div class="series-meta"><span><b>${compact(st.subs)}</b> ${pl(st.subs, 'subscriber')}</span><span><b>${compact(st.views)}</b> ${pl(st.views, 'view')}</span><span><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</span>${gifting.ready ? `<span class="gift-pill" id="giftCount">${giftCountText(n.gift_count)}</span>` : ''}<span>${n.status === 'completed' ? '<b>Completed</b>' : n.update_day === null ? '<b>Ongoing</b>' : `Updates <b>${DAYS_LONG[n.update_day]}s</b>`}</span></div>
             <div class="series-cta">
               ${chs.length ? `<a class="btn btn-primary btn-lg" href="#/novel/${esc(n.slug)}/ch/${progIdx > 0 ? progIdx + 1 : 1}">${progIdx > 0 ? `Continue · Ch. ${progIdx + 1}` : 'Read first chapter'}</a>` : '<span></span>'}
               <button class="btn btn-ghost btn-lg sub-btn" id="subBtn" aria-pressed="${subbed}">${subbed ? '✓ Subscribed' : '+ Subscribe'}</button>
               <button class="btn btn-ghost btn-lg fav-btn" id="favBtn" aria-pressed="${faved}">${faved ? '★ Favorited' : '☆ Favorite'}</button>
+              ${gifting.ready && !mine && api.novels.isPublic(n) ? `<button class="btn btn-ghost btn-lg gift-btn" id="giftBtn">${ICON_GIFT}Send a gift</button>` : ''}
             </div></div></div></div>
       <div class="series-body series-layout">
         <div>
           <div class="ep-head"><h2>${plural(chs.length, 'chapter')}</h2><button class="btn btn-soft btn-sm" id="sortBtn">${asc ? 'Oldest first' : 'Newest first'}</button></div>
-          <ol class="ep-list">${list.map((c) => { const i = chs.indexOf(c); const isNew = c.published_at > now() - 7 * DAY; return `<li class="${readSet.has(c.id) ? 'read' : ''}"><a href="#/novel/${esc(n.slug)}/ch/${i + 1}"><span class="n"><small>Ch.</small>${i + 1}</span><div><div class="t">${esc(c.title)}${isNew ? '<span class="badge badge-up">NEW</span>' : ''}</div><div class="m">${esc(fmtDate(c.published_at))} · ${readMin(wordCount(c.content))} min · ♥ ${compact(c.likes)}</div></div><span class="r">${readSet.has(c.id) ? 'Read' : ''}</span></a></li>`; }).join('') || '<li class="muted small" style="padding:12px 0">No chapters published yet.</li>'}</ol>
+          <ol class="ep-list">${list.map((c) => { const i = chs.indexOf(c); const isNew = c.published_at > now() - 7 * DAY; return `<li class="${readSet.has(c.id) ? 'read' : ''}"><a href="#/novel/${esc(n.slug)}/ch/${i + 1}"><span class="n"><small>Ch.</small>${i + 1}</span><div><div class="t">${esc(c.title)}${isNew ? '<span class="badge badge-up">NEW</span>' : ''}</div><div class="m">${esc(fmtDate(c.published_at))} · ${readMin(wordCount(c.content))} min · ♥ ${compact(c.likes)}<span class="row-gifts" data-row-gifts="${c.id}">${c.gift_count ? ` · ${giftCountText(c.gift_count)}` : ''}</span></div></div><span class="r">${readSet.has(c.id) ? 'Read' : ''}</span></a></li>`; }).join('') || '<li class="muted small" style="padding:12px 0">No chapters published yet.</li>'}</ol>
         </div>
         <aside>
           <h2 style="font-size:var(--t-md);margin:24px 0 8px">About</h2>
           <p class="series-syn clamp" id="syn">${esc(n.synopsis) || '<span class="muted">No synopsis yet.</span>'}</p><button class="series-more" id="synMore">Read more</button>
           <div class="chip-set" style="margin-top:12px">${n.tags.map((t) => `<a class="chip" href="#/browse?q=${encodeURIComponent(t)}">#${esc(t)}</a>`).join('')}</div>
-          <a class="author-row" href="#/u/${esc(a.username)}"><span class="avatar lg" aria-hidden="true">${esc(initials(a.name))}</span><div><div class="n">${nm(a)}</div><div class="b">${esc(a.bio) || 'No bio yet.'}</div></div></a>
+          ${gifting.ready ? '<section class="supporters" id="supporters" aria-labelledby="supTitle"><div class="sup-head"><h2 id="supTitle">Top supporters</h2></div><p class="muted small">Loading…</p></section>' : ''}
+          <a class="author-row" href="#/u/${esc(a.username)}">${crownedAvatar(a)}<div><div class="n">${nm(a)}</div><div class="b">${esc(a.bio) || 'No bio yet.'}</div></div></a>
           ${mine ? `<a class="btn btn-ghost btn-block" style="margin-top:14px" href="#/studio/novel/${n.id}">Edit in Studio</a>` : ''}
         </aside></div>`;
+    if (gifting.ready) paintSupporters(n, $('#supporters'), mine);
+    $('#giftBtn')?.addEventListener('click', () => openGiftSheet({
+      novel: n,
+      onSent: () => {
+        $('#giftCount').textContent = giftCountText(n.gift_count);
+        paintSupporters(n, $('#supporters'), mine);
+        const av = $('.author-row .av-wrap'); if (av) av.outerHTML = crownedAvatar(a);
+      },
+    }));
     $('#sortBtn').addEventListener('click', () => go(`/novel/${n.slug}${asc ? '' : '?sort=asc'}`));
     $('#synMore').addEventListener('click', () => { const s = $('#syn'); s.classList.toggle('clamp'); $('#synMore').textContent = s.classList.contains('clamp') ? 'Read more' : 'Show less'; });
     $('#subBtn').addEventListener('click', async () => {
@@ -685,6 +747,9 @@
           <span class="sp"></span>
           ${idx + 1 < chs.length ? `<a href="#/novel/${esc(n.slug)}/ch/${idx + 2}" data-next="${idx + 1}">Next chapter</a>` : ''}
         </div>
+        ${!gifting.ready ? '' : mine
+          ? `<div class="gift-band mine"><span class="gb-art">${giftSvg('candle', 40)}</span><div class="gb-t"><b>Gifts on this chapter</b><span data-gift-count="${c.id}">${giftCountText(c.gift_count, 'No gifts yet')}</span></div></div>`
+          : `<div class="gift-band"><span class="gb-art">${giftSvg('candle', 40)}</span><div class="gb-t"><b>Enjoyed this chapter?</b><span>Send ${esc(a.name)} a gift. <span class="gb-count" data-gift-count="${c.id}">${c.gift_count ? giftCountText(c.gift_count) + ' so far.' : ''}</span></span></div><button type="button" class="gb-btn" data-gift="${c.id}">${ICON_GIFT}Send a gift</button></div>`}
         <section class="ep-comments" id="cmts-${c.id}"></section>
         ${idx + 1 < chs.length ? `<div class="ep-next" data-sentinel="${idx + 1}"></div>` : `<div class="ep-end"><b>You are caught up</b>${n.update_day !== null ? `New chapters arrive on ${DAYS_LONG[n.update_day]}s.` : 'More is on the way.'}<br><button class="btn btn-sm" data-sub style="margin-top:12px">${me && api.subscriptions.has(me.id, n.id) ? '✓ Subscribed' : 'Subscribe for updates'}</button></div>`}
       </article>`;
@@ -756,6 +821,12 @@
     canvas.addEventListener('click', async (e) => {
       const nxt = e.target.closest('[data-next]');
       if (nxt) { const block = $(`#ch-${+nxt.dataset.next + 1}`); if (block) { e.preventDefault(); block.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; } }
+      const gift = e.target.closest('[data-gift]');
+      if (gift) {
+        const gc = api.chapters.byId(gift.dataset.gift);
+        openGiftSheet({ novel: n, chapter: gc, onSent: ({ chapterId }) => { if (!chapterId) return; $$(`[data-gift-count="${chapterId}"]`, canvas).forEach((el) => { el.textContent = giftCountText(api.chapters.byId(chapterId).gift_count) + ' so far.'; }); } });
+        return;
+      }
       const like = e.target.closest('[data-like]'); const sub = e.target.closest('[data-sub]');
       if (like) { if (!requireAuth()) return; const on = await api.likes.toggle(me.id, like.dataset.like); like.setAttribute('aria-pressed', on); like.querySelector('span').textContent = compact(api.chapters.byId(like.dataset.like).likes); }
       if (sub) { if (!requireAuth()) return; const on = await api.subscriptions.toggle(me.id, n.id); $$('[data-sub]', canvas).forEach((b) => { b.setAttribute('aria-pressed', on); b.textContent = on ? '✓ Subscribed' : (b.classList.contains('btn') ? 'Subscribe for updates' : '+ Subscribe'); }); toast(on ? `Subscribed to ${n.title}` : 'Unsubscribed'); }
@@ -852,7 +923,9 @@
     if (!requireAuth('/studio')) return;
     setTitle('Studio'); const me = auth.current(); const list = api.novels.byAuthor(me.id);
     app.innerHTML = `<header class="studio-head"><div><h1>Studio</h1><p class="lead">Your series, drafts and chapters.</p></div><button class="btn btn-primary" id="newNovel">New series</button></header>
-      <ul class="st-rows">${list.map((n) => { const all = api.novels.all(n.id); const pub = all.filter((c) => c.status === 'published'); const live = api.novels.isPublic(n); const drafts = all.length - pub.length; return `<li>${thumb(n, { sm: true, badge: false })}<div><a class="t" href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a><div class="m"><span class="badge ${live ? 'badge-live' : 'badge-draft'}">${live ? (n.status === 'completed' ? 'COMPLETED' : 'LIVE') : 'DRAFT'}</span><span>${pub.length} published${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span><span>${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}</span><span>${n.update_day !== null ? DAYS_LONG[n.update_day] + 's' : 'no release day'}</span></div></div><div class="a"><a class="btn btn-soft btn-sm" href="#/studio/novel/${n.id}">Manage</a>${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View</a>` : ''}</div></li>`; }).join('') || `<li style="display:block"><div class="empty"><h3>Start your first series</h3><p>Create a series, add chapters, publish when ready. Drafts stay private.</p><button class="btn" id="newNovel2">New series</button></div></li>`}</ul>`;
+      ${gifting.ready ? '<section class="card gift-earn" id="giftEarn" aria-labelledby="geTitle"><h2 id="geTitle">Gifts</h2><p class="muted small">Loading…</p></section>' : ''}
+      <ul class="st-rows">${list.map((n) => { const all = api.novels.all(n.id); const pub = all.filter((c) => c.status === 'published'); const live = api.novels.isPublic(n); const drafts = all.length - pub.length; return `<li>${thumb(n, { sm: true, badge: false })}<div><a class="t" href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a><div class="m"><span class="badge ${live ? 'badge-live' : 'badge-draft'}">${live ? (n.status === 'completed' ? 'COMPLETED' : 'LIVE') : 'DRAFT'}</span><span>${pub.length} published${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span><span>${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}</span>${gifting.ready ? `<span>${giftCountText(n.gift_count)}</span>` : ''}<span>${n.update_day !== null ? DAYS_LONG[n.update_day] + 's' : 'no release day'}</span></div></div><div class="a"><a class="btn btn-soft btn-sm" href="#/studio/novel/${n.id}">Manage</a>${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View</a>` : ''}</div></li>`; }).join('') || `<li style="display:block"><div class="empty"><h3>Start your first series</h3><p>Create a series, add chapters, publish when ready. Drafts stay private.</p><button class="btn" id="newNovel2">New series</button></div></li>`}</ul>`;
+    if (gifting.ready) paintEarnings(me, $('#giftEarn'));
     const create = async () => { const n = await api.novels.create(me.id); go(`/studio/novel/${n.id}`); };
     $('#newNovel').addEventListener('click', create); $('#newNovel2')?.addEventListener('click', create);
   });
@@ -1084,7 +1157,278 @@
       <h2>Your account</h2>
       <p>Change your theme, email and password in <a href="#/settings">Settings</a>. If you signed in somewhere you shouldn’t have, use <b>Sign out everywhere</b> there.</p>
       <h2>Comments</h2>
-      <p>You can delete your own comments, and authors can delete any comment on their chapters.</p></div>`;
+      <p>You can delete your own comments, and authors can delete any comment on their chapters.</p>
+      <h2>Gifts and Ink</h2>
+      <p>Ink is what you use to send gifts to writers. Writers keep 60% of every gift. Ink has no cash value and can’t be cashed out or transferred. Unspent Ink packs can be refunded within 14 days if none of the pack has been used. See <a href="#/ink">Ink</a> for the details.</p></div>`;
+  });
+
+  /* 6m. Gifting UI ----------------------------------------------------------
+     Gift icons, the gift sheet, the Ink page, the Supporter Wall, Studio earnings,
+     and the gift animations and sounds. */
+  const ICON_DROP = '<svg class="ico-drop" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z" fill="currentColor"/></svg>';
+  const ICON_GIFT = '<svg class="ico-gift" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8c-2-4-6-4-6-1s6 1 6 1 6 2 6-1-4-3-6 1"/></svg>';
+  const GIFT_TIERS = [{ t: 1, name: 'Small thanks' }, { t: 2, name: 'Cozy cheers' }, { t: 3, name: 'Story moments' }, { t: 4, name: 'Grand gestures' }];
+  const GIFT_ART = {
+    ribbon: '<path d="M22 8h20v48l-10-8-10 8z" fill="#CC1531"/><rect x="22" y="8" width="20" height="7" fill="#F5C542"/><path d="M28 18v26" stroke="#E8566B" stroke-width="3"/>',
+    ink: '<ellipse cx="32" cy="56" rx="16" ry="3.5" fill="#D9DCF8" stroke="none"/><path d="M32 6c10 13 16 21 16 30a16 16 0 0 1-32 0c0-9 6-17 16-30z" fill="#2A2F6B"/><path d="M24 37a8 8 0 0 0 6 8" stroke="#fff" stroke-width="3"/><circle cx="38" cy="26" r="2" fill="#fff" stroke="none"/>',
+    postit: '<path d="M12 12h40v30l-10 10H12z" fill="#FFE066"/><path d="M42 52V42h10z" fill="#F2C94C"/><path d="M32 38c-7-5-10-8-10-12a5 5 0 0 1 10-2 5 5 0 0 1 10 2c0 4-3 7-10 12z" fill="#CC1531"/>',
+    tea: '<ellipse cx="30" cy="54" rx="21" ry="4.5" fill="#E9EAEE"/><path d="M44 30h4a6 6 0 0 1 0 12h-5"/><path d="M13 26h32v9a16 16 0 0 1-16 16h0a16 16 0 0 1-16-16z" fill="#fff"/><path d="M14 32h30" stroke="#CC1531" stroke-width="3"/><path class="gfx-steamline" d="M23 20c-3-4 3-6 0-10M31 20c-3-4 3-6 0-10M39 20c-3-4 3-6 0-10" stroke="#9AA0A6"/>',
+    candle: '<ellipse cx="32" cy="55" rx="15" ry="4.5" fill="#C9A227"/><rect x="24" y="28" width="16" height="26" rx="3" fill="#FFF4D6"/><path d="M28 28v6a2 2 0 0 0 4 0v-6" fill="#FFF4D6"/><path d="M32 28v-4"/><g class="gfx-flame"><path d="M32 6c5 6 7 9 7 13a7 7 0 0 1-14 0c0-4 2-7 7-13z" fill="#F97316"/><path d="M32 13c2 3 3 4.5 3 6.5a3 3 0 0 1-6 0c0-2 1-3.5 3-6.5z" fill="#F5C542" stroke="none"/></g>',
+    cat: '<g class="gfx-tail"><path d="M50 48c8 4 4 10-8 9" stroke="#22232A" stroke-width="8"/><path d="M50 48c8 4 4 10-8 9" stroke="#F4A261" stroke-width="4"/></g><ellipse cx="38" cy="44" rx="16" ry="11" fill="#F4A261"/><path d="M13 31l1-11 7 6zM24 26l7-6 1 11z" fill="#F4A261"/><circle cx="22" cy="38" r="11" fill="#F4A261"/><path d="M16 38q2.5 2.5 5 0M24 38q2.5 2.5 5 0"/><path d="M21 43h2"/><path d="M44 14h6l-6 7h6" stroke="#3445E6"/>',
+    typewriter: '<rect x="19" y="8" width="26" height="22" rx="1" fill="#fff"/><path d="M24 15h16M24 20h12" stroke="#9AA0A6"/><rect x="7" y="26" width="50" height="6" rx="2" fill="#22232A"/><rect x="10" y="32" width="44" height="22" rx="5" fill="#14B8A6"/><circle cx="19" cy="40" r="2.5" fill="#fff"/><circle cx="27" cy="40" r="2.5" fill="#fff"/><circle cx="35" cy="40" r="2.5" fill="#fff"/><circle cx="43" cy="40" r="2.5" fill="#fff"/><path d="M22 47h20" stroke="#fff" stroke-width="3"/>',
+    star: '<path d="M30 36L10 56M25 30L11 44M37 42L23 56" stroke="#A5B4FC" stroke-width="4"/><path d="M40 9L43.6 18.5L54 19.2L46 25.8L48.7 36L40 30.3L31.3 36L34 25.8L26 19.2L36.4 18.5Z" fill="#F5C542"/><path d="M54 40v6M51 43h6M14 14v4M12 16h4" stroke="#F5C542"/>',
+    crown: '<path d="M10 22l12 11 10-17 10 17 12-11-5 30H15z" fill="#F5C542"/><rect x="15" y="44" width="34" height="8" fill="#E0A800"/><circle cx="24" cy="48" r="2.5" fill="#CC1531"/><circle cx="32" cy="48" r="2.5" fill="#3445E6"/><circle cx="40" cy="48" r="2.5" fill="#CC1531"/><circle cx="10" cy="21" r="3.5" fill="#F5C542"/><circle cx="32" cy="14" r="3.5" fill="#F5C542"/><circle cx="54" cy="21" r="3.5" fill="#F5C542"/>',
+    aurora: '<rect x="5" y="5" width="54" height="54" rx="14" fill="#1E2050"/><path d="M10 28c8-10 16 6 24-4s14-6 20 2" stroke="#34D399" stroke-width="5"/><path d="M10 38c8-10 16 6 24-4s14-6 20 2" stroke="#A78BFA" stroke-width="4"/><path d="M7 54l13-11 9 7 11-12 17 16" fill="#0F1033" stroke="none"/><circle cx="18" cy="15" r="1.5" fill="#fff" stroke="none"/><circle cx="44" cy="12" r="1.5" fill="#fff" stroke="none"/><circle cx="50" cy="20" r="1" fill="#fff" stroke="none"/>',
+    dragon: '<path class="gfx-wing" d="M30 32L36 8L46 28Z" fill="#F5C542"/><path d="M6 38L24 28L34 34L58 14L52 36L40 40L30 54L24 42Z" fill="#CC1531"/><path d="M24 28L34 34L24 42Z" fill="#9E0F25"/><path d="M34 34L58 14L40 40Z" fill="#E8566B"/><circle cx="13" cy="36" r="1.8" fill="#22232A" stroke="none"/>',
+    phoenix: '<path d="M32 30C22 14 10 16 5 9c2 13 10 21 23 25z" fill="#F97316"/><path d="M32 30C42 14 54 16 59 9c-2 13-10 21-23 25z" fill="#F97316"/><path d="M30 30C24 22 17 21 13 18c3 7 8 11 15 14zM34 30C40 22 47 21 51 18c-3 7-8 11-15 14z" fill="#F5C542" stroke="none"/><path d="M32 42c-5 7-2 13 0 16 2-3 5-9 0-16z" fill="#F97316"/><path d="M32 20c5 6 6 15 0 24-6-9-5-18 0-24z" fill="#CC1531"/><circle cx="32" cy="17" r="4.5" fill="#CC1531"/><path d="M32 12l-2-5M35 13l2-5" stroke="#F5C542"/>',
+  };
+  const giftSvg = (id, size = 64) => `<svg class="gift-svg" width="${size}" height="${size}" viewBox="0 0 64 64" fill="none" stroke="#22232A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${GIFT_ART[id] || GIFT_ART.ribbon}</svg>`;
+  const giftCountText = (count, none = '0 gifts') => (count ? `${compact(count)} ${pl(count, 'gift')}` : none);
+  /** Author avatar, with a small crown for 48 hours after someone sends an Author's Crown. */
+  const crownedAvatar = (u) => `<span class="av-wrap">${gifting.crowned.has(u?.id) ? `<span class="av-crown" title="Crowned by a reader">${giftSvg('crown', 26)}</span>` : ''}<span class="avatar lg" aria-hidden="true">${esc(initials(u?.name))}</span></span>`;
+
+  /** Supporter Wall on the series page. Anonymous gifters never show a name. */
+  async function paintSupporters(n, host, mine) {
+    if (!host) return;
+    try {
+      const rows = await gifting.supporters(n.id);
+      host.innerHTML = `<div class="sup-head"><h2 id="supTitle">Top supporters</h2></div>${rows?.length ? `<ol class="sup-list">${rows.map((r) => `<li>
+        <span class="sup-rank">${r.rank}</span>
+        <span class="avatar ${r.anonymous ? 'anon' : ''}" aria-hidden="true">${r.anonymous ? '?' : esc(initials(r.name))}</span>
+        <span class="sup-who">${r.anonymous ? '<b>Anonymous</b>' : `<a href="#/u/${esc(r.username)}"><b>${esc(r.name)}</b></a>`}<span>${esc(r.top_gift)}${Number(r.gifts) > 1 ? ` + ${Number(r.gifts) - 1} more` : ''}</span></span>
+        <span class="sup-ink">${Number(r.total_ink).toLocaleString()} Ink</span></li>`).join('')}</ol>` : `<p class="muted small">No gifts yet.${mine ? ' Readers who send gifts show up here.' : ' Be the first to send one.'}</p>`}`;
+    } catch { host.remove(); }
+  }
+
+  /** Studio card: what this writer has received. */
+  async function paintEarnings(me, host) {
+    if (!host) return;
+    try {
+      const s = await gifting.summary();
+      host.innerHTML = me.official
+        ? `<h2 id="geTitle">Gifts</h2>
+           <div class="ge-stats"><div><span>Gifts received</span><b>${Number(s.received).toLocaleString()}</b></div><div><span>Ink received</span><b>${Number(s.ink).toLocaleString()}</b></div><div><span>Site income</span><b>${money(Number(s.house_ink))}</b></div></div>
+           <p class="hint">This is an official account, so gifts here are site income. There’s no 60% split and nothing to cash out.</p>`
+        : `<h2 id="geTitle">Gifts</h2>
+           <div class="ge-stats"><div><span>Gifts received</span><b>${Number(s.received).toLocaleString()}</b></div><div><span>Pending</span><b>${money(Number(s.pending_cents))}</b></div><div><span>Available</span><b>${money(Number(s.available_cents))}</b></div></div>
+           <p class="hint">You keep 60% of every gift. New gifts stay pending for 14 days in case of refunds. Cash-outs (minimum $25, paid monthly) open soon.</p>`;
+    } catch { host.remove(); }
+  }
+
+  /** The gift sheet. chapter is optional: without it, the gift goes to the whole series. */
+  function openGiftSheet({ novel, chapter = null, onSent } = {}) {
+    if (!requireAuth()) return;
+    if (!gifting.ready) { toast('Gifting isn’t switched on yet.'); return; }
+    const me = auth.current(); const author = api.users.byId(novel.author_id);
+    if (me.id === novel.author_id) { toast('You can’t send gifts to your own series.'); return; }
+    const st = { target: chapter ? 'chapter' : 'series', tier: 2, pick: null, anon: false, note: '', busy: false };
+    st.pick = (gifting.tier(2)[1] || gifting.tier(2)[0] || gifting.catalog[0]).id;
+
+    const d = document.createElement('dialog');
+    d.className = 'gift-sheet'; d.setAttribute('aria-labelledby', 'gsTitle');
+    document.body.appendChild(d);
+
+    const paint = () => {
+      const g = gifting.byId(st.pick); const enough = g && gifting.ink >= g.cost;
+      d.innerHTML = `<form method="dialog" class="gs-in">
+        <div class="gs-head">
+          <div><h2 id="gsTitle">Send a gift</h2><p class="muted small">to ${nm(author)}${chapter && st.target === 'chapter' ? ` for Chapter ${api.novels.published(novel.id).indexOf(chapter) + 1}` : ` for ${esc(novel.title)}`}</p></div>
+          <div class="gs-bal"><span class="ink-pill">${ICON_DROP}${gifting.ink.toLocaleString()} Ink</span><a href="#/ink" class="gs-more">Get Ink</a></div>
+        </div>
+        ${chapter ? `<div class="gs-seg" role="group" aria-label="What the gift is for"><button type="button" data-target="chapter" aria-pressed="${st.target === 'chapter'}">This chapter</button><button type="button" data-target="series" aria-pressed="${st.target === 'series'}">Whole series</button></div>` : ''}
+        <div class="gs-tabs" role="group" aria-label="Gift tiers">${GIFT_TIERS.map(({ t, name }) => { const l = gifting.tier(t); return `<button type="button" data-tier="${t}" aria-pressed="${st.tier === t}"><b>${name}</b><span>${l.length ? `${l[0].cost.toLocaleString()}–${l[l.length - 1].cost.toLocaleString()}` : ''}</span></button>`; }).join('')}</div>
+        <div class="gs-grid" role="radiogroup" aria-label="Gifts">${gifting.tier(st.tier).map((x) => `<button type="button" role="radio" aria-checked="${x.id === st.pick}" class="gs-gift" data-pick="${x.id}"><span class="gs-art tile-t${x.tier}">${giftSvg(x.id, 56)}</span><span class="gs-name">${esc(x.name)}</span><span class="gs-cost">${x.cost.toLocaleString()} Ink</span></button>`).join('')}</div>
+        ${g?.allows_note ? `<div class="field gs-note"><label for="gsNote">Add a note <span class="muted">(optional)</span></label><input class="input" id="gsNote" maxlength="120" value="${esc(st.note)}" placeholder="Say something to the writer" autocomplete="off"></div>` : ''}
+        <div class="gs-opts">
+          <label class="gs-check"><input type="checkbox" id="gsAnon" ${st.anon ? 'checked' : ''}> Send anonymously</label>
+          <label class="gs-check"><input type="checkbox" id="gsSound" ${sfx.on() ? 'checked' : ''}> Gift sounds</label>
+        </div>
+        <p class="gs-fine">${st.anon ? 'You’ll show as Anonymous on the Supporter Wall.' : 'Your name will show on the Supporter Wall.'} ${esc(author?.name || 'The writer')} ${author?.official ? 'runs this site.' : 'keeps 60% of every gift.'}</p>
+        <div class="gs-actions">
+          <button class="btn btn-ghost" value="cancel" formnovalidate>Cancel</button>
+          ${enough ? `<button class="btn btn-primary" type="button" id="gsSend" ${st.busy ? 'disabled' : ''}>Send ${esc(g.name)} · ${g.cost.toLocaleString()} Ink</button>` : `<a class="btn btn-primary" href="#/ink" id="gsGet">Not enough Ink · Get more</a>`}
+        </div>
+      </form>`;
+    };
+    const repaint = (focusSel) => { paint(); if (focusSel) d.querySelector(focusSel)?.focus(); };
+
+    async function send() {
+      const g = gifting.byId(st.pick); if (!g || st.busy) return;
+      sfx.prime(); // must happen during the click, before any waiting, or browsers block the sound
+      st.busy = true; const btn = d.querySelector('#gsSend'); if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+      try {
+        const chapterId = st.target === 'chapter' && chapter ? chapter.id : null;
+        await gifting.send({ giftId: g.id, novelId: novel.id, chapterId, anonymous: st.anon, note: g.allows_note ? st.note : '' });
+        d.close();
+        gfx.play(g.id); sfx.play(g.id);
+        toast(`${g.name} sent to ${author.name}${st.anon ? ' anonymously' : ''}`);
+        renderShell();
+        onSent?.({ gift: g, chapterId });
+      } catch (err) { st.busy = false; toast(err.message); repaint('#gsSend'); }
+    }
+
+    d.addEventListener('click', (e) => {
+      const tgt = e.target.closest('[data-target]'); const tier = e.target.closest('[data-tier]'); const pick = e.target.closest('[data-pick]');
+      if (tgt) { st.target = tgt.dataset.target; repaint(`[data-target="${st.target}"]`); return; }
+      if (tier) { st.tier = +tier.dataset.tier; st.pick = gifting.tier(st.tier)[0]?.id || st.pick; repaint(`[data-tier="${st.tier}"]`); return; }
+      if (pick) { st.pick = pick.dataset.pick; repaint(`[data-pick="${st.pick}"]`); return; }
+      if (e.target.closest('#gsSend')) { send(); return; }
+      if (e.target.closest('a[href="#/ink"]')) d.close();
+    });
+    d.addEventListener('change', (e) => {
+      if (e.target.id === 'gsAnon') { st.anon = e.target.checked; repaint('#gsAnon'); }
+      if (e.target.id === 'gsSound') { sfx.set(e.target.checked); if (e.target.checked) { sfx.prime(); sfx.play('ink'); } }
+    });
+    d.addEventListener('input', (e) => { if (e.target.id === 'gsNote') st.note = e.target.value; });
+    d.addEventListener('submit', (e) => { if (e.submitter?.value !== 'cancel') e.preventDefault(); }); // Enter in the note field must not close the sheet
+    d.addEventListener('close', () => d.remove());
+    paint(); d.showModal();
+    d.querySelector(`[data-pick="${st.pick}"]`)?.focus();
+  }
+
+  /* Gift animations. The sender sees them; nothing ever stays over the text.
+     With "reduce motion" switched on, the icon just shows for a moment instead. */
+  const GIFT_MS = { ribbon: 1100, ink: 1200, postit: 1300, tea: 2200, candle: 2600, cat: 2600, typewriter: 3200, star: 2600, crown: 3000, aurora: 4200, dragon: 4600, phoenix: 5000 };
+  const gfx = {
+    reduced: () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+    bits: (cls, n, style) => Array.from({ length: n }, (_, i) => `<i class="${cls}" style="${style(i, n)}"></i>`).join(''),
+    extras(id) {
+      const r = (a, b) => (a + Math.random() * (b - a)).toFixed(2);
+      const colors = ['#CC1531', '#F5C542', '#3445E6', '#14B8A6', '#F97316', '#A78BFA'];
+      switch (id) {
+        case 'ink': return '<i class="gfx-ring"></i><i class="gfx-ring r2"></i>';
+        case 'tea': return gfx.bits('gfx-steam', 3, (i) => `--x:${-30 + i * 30}px;--d:${0.5 + i * 0.18}s`);
+        case 'candle': return '<i class="gfx-glow"></i>';
+        case 'cat': return '<i class="gfx-z">z</i><i class="gfx-z z2">z</i>';
+        case 'typewriter': return '<span class="gfx-type" id="gfxType"></span>';
+        case 'star': return gfx.bits('gfx-spark', 16, (i, n) => { const p = i / n; return `left:${(84 - 74 * p).toFixed(1)}vw;top:${(8 + 72 * p).toFixed(1)}vh;--d:${(0.15 + p * 1.5).toFixed(2)}s`; });
+        case 'crown': return gfx.bits('gfx-burst', 12, (i, n) => `--a:${Math.round((360 / n) * i)}deg;--d:1.15s`);
+        case 'aurora': return '<i class="gfx-band b1"></i><i class="gfx-band b2"></i><i class="gfx-band b3"></i>' + gfx.bits('gfx-twinkle', 14, () => `left:${r(4, 96)}vw;top:${r(4, 40)}vh;--d:${r(0, 2)}s`);
+        case 'dragon': return gfx.bits('gfx-conf', 34, () => `left:${r(10, 95)}vw;--d:${r(0.8, 2.6)}s;--c:${colors[Math.floor(Math.random() * colors.length)]};--r:${r(-200, 200)}deg`);
+        case 'phoenix': return gfx.bits('gfx-ember', 30, () => `left:${r(30, 70)}vw;--d:${r(0, 1.4)}s;--x:${r(-60, 60)}px`) + gfx.bits('gfx-feather', 18, () => `left:${r(15, 85)}vw;--d:${r(3.4, 4.2)}s;--x:${r(-80, 80)}px;--r:${r(-90, 90)}deg`);
+        default: return '';
+      }
+    },
+    play(id) {
+      const g = gifting.byId(id); if (!g) return;
+      $$('.gfx, .gfx-skip').forEach((x) => x.remove());
+      const reduced = gfx.reduced();
+      const el = document.createElement('div');
+      el.className = `gfx gfx-t${g.tier} ${reduced ? 'gfx-still' : 'gfx-' + id}`;
+      el.setAttribute('aria-hidden', 'true');
+      el.innerHTML = `${g.tier === 4 && !reduced ? '<i class="gfx-dim"></i>' : ''}${reduced ? '' : gfx.extras(id)}<div class="gfx-art">${giftSvg(id, 200)}</div>`;
+      document.body.appendChild(el);
+      let skip = null, typer = null;
+      const end = () => { clearTimeout(timer); clearInterval(typer); el.remove(); skip?.remove(); };
+      const timer = setTimeout(end, reduced ? 1400 : GIFT_MS[id] || 2000);
+      if (g.tier === 4 && !reduced) {
+        skip = document.createElement('button'); skip.type = 'button'; skip.className = 'gfx-skip'; skip.textContent = 'Skip';
+        skip.addEventListener('click', end); el.addEventListener('click', end); document.body.appendChild(skip);
+      }
+      if (id === 'typewriter' && !reduced) {
+        const text = 'THANK YOU!'; let i = 0; const out = $('#gfxType');
+        setTimeout(() => { typer = setInterval(() => { out.textContent = text.slice(0, ++i); if (i >= text.length) clearInterval(typer); }, 160); }, 250);
+      }
+    },
+  };
+
+  /* Gift sounds, made in the browser with Web Audio (no sound files to license or download).
+     Off until the reader switches them on in the gift sheet. Replace with real recordings later if you like. */
+  const sfx = {
+    ctx: null, out: null, buf: null,
+    on() { try { return localStorage.getItem('sfb.giftSound') === 'on'; } catch { return false; } },
+    set(v) { try { localStorage.setItem('sfb.giftSound', v ? 'on' : 'off'); } catch {} },
+    prime() {
+      if (!sfx.on()) return null;
+      if (!sfx.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+        sfx.ctx = new AC(); sfx.out = sfx.ctx.createGain(); sfx.out.gain.value = 0.7; sfx.out.connect(sfx.ctx.destination);
+      }
+      if (sfx.ctx.state === 'suspended') sfx.ctx.resume();
+      return sfx.ctx;
+    },
+    env(g, t, dur, vol, attack) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); },
+    tone(f, t, dur, { type = 'sine', vol = 0.1, to = null, attack = 0.006 } = {}) {
+      const a = sfx.ctx, o = a.createOscillator(), g = a.createGain();
+      o.type = type; o.frequency.setValueAtTime(f, t); if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+      sfx.env(g, t, dur, vol, Math.min(attack, dur / 2)); o.connect(g).connect(sfx.out); o.start(t); o.stop(t + dur + 0.05);
+    },
+    noise(t, dur, { freq = 1500, to = null, vol = 0.1, type = 'bandpass', q = 1 } = {}) {
+      const a = sfx.ctx;
+      if (!sfx.buf) { sfx.buf = a.createBuffer(1, a.sampleRate, a.sampleRate); const ch = sfx.buf.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1; }
+      const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+      s.buffer = sfx.buf; s.loop = true; f.type = type; f.Q.value = q;
+      f.frequency.setValueAtTime(freq, t); if (to) f.frequency.exponentialRampToValueAtTime(to, t + dur);
+      sfx.env(g, t, dur, vol, Math.min(0.01, dur / 3)); s.connect(f).connect(g).connect(sfx.out); s.start(t); s.stop(t + dur + 0.05);
+    },
+    purr(t, dur) {
+      const a = sfx.ctx, o = a.createOscillator(), lp = a.createBiquadFilter(), am = a.createGain(), lfo = a.createOscillator(), depth = a.createGain(), g = a.createGain();
+      o.type = 'sawtooth'; o.frequency.value = 52; lp.type = 'lowpass'; lp.frequency.value = 280;
+      am.gain.value = 0.5; lfo.frequency.value = 24; depth.gain.value = 0.5; lfo.connect(depth).connect(am.gain);
+      sfx.env(g, t, dur, 0.22, 0.3); o.connect(lp).connect(am).connect(g).connect(sfx.out);
+      o.start(t); lfo.start(t); o.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
+    },
+    play(id) { const a = sfx.prime(); if (!a) return; try { (SOUNDS[id] || noop)(a.currentTime + 0.03); } catch {} },
+  };
+  const SOUNDS = {
+    ribbon: (t) => sfx.noise(t, 0.4, { freq: 2600, to: 1200, vol: 0.08 }),
+    ink: (t) => { sfx.tone(1100, t, 0.12, { to: 380, vol: 0.18 }); sfx.tone(700, t + 0.1, 0.25, { to: 300, vol: 0.05 }); },
+    postit: (t) => { sfx.noise(t, 0.2, { freq: 4000, vol: 0.06, type: 'highpass' }); sfx.noise(t + 0.22, 0.05, { freq: 900, vol: 0.2 }); },
+    tea: (t) => { sfx.noise(t, 0.7, { freq: 700, to: 1500, vol: 0.07, type: 'lowpass' }); sfx.tone(2600, t + 0.8, 0.45, { type: 'triangle', vol: 0.08 }); sfx.tone(3900, t + 0.8, 0.3, { vol: 0.04 }); },
+    candle: (t) => { sfx.noise(t, 0.14, { freq: 3200, vol: 0.18, type: 'highpass' }); for (let i = 0; i < 9; i++) sfx.noise(t + 0.3 + i * 0.17 + Math.random() * 0.08, 0.03, { freq: 2000, vol: 0.05 }); },
+    cat: (t) => sfx.purr(t, 2),
+    typewriter: (t) => { for (let i = 0; i < 10; i++) sfx.noise(t + 0.25 + i * 0.16, 0.035, { freq: 3500, vol: 0.14 }); sfx.tone(1760, t + 2.05, 0.9, { vol: 0.12 }); sfx.tone(2637, t + 2.05, 0.6, { vol: 0.04 }); },
+    star: (t) => { sfx.tone(500, t, 1.3, { to: 1800, vol: 0.05, type: 'triangle' }); sfx.noise(t, 1.3, { freq: 1500, to: 6000, vol: 0.04 }); [2093, 2637, 3136].forEach((f, i) => sfx.tone(f, t + 1.35 + i * 0.07, 0.6, { vol: 0.06 })); },
+    crown: (t) => { sfx.tone(523, t + 0.5, 0.35, { type: 'sawtooth', vol: 0.05 }); sfx.tone(784, t + 0.85, 0.6, { type: 'sawtooth', vol: 0.05 }); sfx.tone(3136, t + 1.5, 0.5, { vol: 0.05 }); },
+    aurora: (t) => [220, 277, 330, 440].forEach((f) => sfx.tone(f, t, 3.8, { vol: 0.035, attack: 1.2 })),
+    dragon: (t) => { for (let i = 0; i < 4; i++) sfx.noise(t + i * 0.12, 0.08, { freq: 2500, vol: 0.06 }); for (let i = 0; i < 5; i++) sfx.noise(t + 0.8 + i * 0.5, 0.25, { freq: 400, vol: 0.1, type: 'lowpass' }); sfx.tone(110, t + 2.3, 0.7, { type: 'sawtooth', to: 80, vol: 0.06 }); },
+    phoenix: (t) => { sfx.noise(t, 1.7, { freq: 300, to: 2500, vol: 0.09, type: 'lowpass' }); sfx.tone(1200, t + 1.7, 0.5, { to: 1900, vol: 0.07, type: 'triangle' }); [1568, 2093, 2637, 3136, 4186].forEach((f, i) => sfx.tone(f, t + 2.4 + i * 0.09, 0.5, { vol: 0.04 })); },
+  };
+
+  /* 6n. Ink page --------------------------------------------------------------- */
+  route('/ink', async ({ app }) => {
+    if (!requireAuth('/ink')) return;
+    setTitle('Ink');
+    const status = new URLSearchParams(location.search).get('ink'); // set by Stripe's return link
+    if (status) history.replaceState(null, '', location.pathname + location.hash);
+    if (!gifting.ready) { app.innerHTML = '<div class="page"><h1>Ink</h1><p class="muted">Gifting isn’t switched on yet. Check back soon.</p></div>'; return; }
+    await gifting.refreshWallet();
+    app.innerHTML = `<div class="ink-page">
+      <header class="studio-head"><div><h1>Ink</h1><p class="lead">Ink is how you send gifts to writers. Writers keep 60% of every gift.</p></div>
+        <div class="ink-balance"><span>Your balance</span><b id="inkBal">${ICON_DROP}${gifting.ink.toLocaleString()}</b></div></header>
+      ${status === 'paid' ? '<div class="pub-state live" id="inkStatus" role="status">Payment received. Adding your Ink…</div>' : status === 'canceled' ? '<div class="pub-state" role="status">Checkout canceled. You weren’t charged.</div>' : ''}
+      <ul class="ink-packs">${gifting.packs.map((p) => `<li>
+        <span class="ink-pack-art">${giftSvg('ink', 48)}</span>
+        <span class="ink-amt">${p.ink.toLocaleString()} Ink</span>
+        <span class="ink-label">${p.label ? `<span class="badge badge-up">${esc(p.label)}</span>` : ''}</span>
+        <button class="btn btn-primary btn-block" data-pack="${esc(p.id)}">${money(p.price_cents)}</button></li>`).join('')}</ul>
+      <section class="card ink-rules"><h2>Good to know</h2><ul>
+        <li>Ink can only be spent on gifts. It has no cash value and can’t be cashed out or transferred.</li>
+        <li>An Ink pack can be refunded within 14 days if none of it has been spent. Email <a href="mailto:storiesfrombeyondofficial@gmail.com">storiesfrombeyondofficial@gmail.com</a>.</li>
+        <li>Spent Ink can’t be refunded. Unspent Ink is removed if you delete your account.</li>
+        <li>You can buy up to $100 of Ink in 24 hours.</li>
+        <li>Payments are handled by Stripe. Stories From Beyond never sees your card details.</li>
+      </ul></section></div>`;
+
+    $$('[data-pack]', app).forEach((b) => b.addEventListener('click', async () => {
+      const label = b.textContent; $$('[data-pack]', app).forEach((x) => { x.disabled = true; }); b.textContent = 'Opening checkout…';
+      try { await gifting.checkout(b.dataset.pack); } catch (err) { toast(err.message); $$('[data-pack]', app).forEach((x) => { x.disabled = false; }); b.textContent = label; }
+    }));
+
+    if (status === 'paid') {
+      let stopped = false; cleanup = () => { stopped = true; };
+      for (let i = 0; i < 10 && !stopped; i++) {
+        const last = await gifting.lastPurchase().catch(() => null);
+        if (last?.status === 'paid') {
+          await gifting.refreshWallet(); if (stopped) return;
+          $('#inkBal').innerHTML = `${ICON_DROP}${gifting.ink.toLocaleString()}`;
+          $('#inkStatus').textContent = `${last.ink.toLocaleString()} Ink added. Your balance is ${gifting.ink.toLocaleString()} Ink.`;
+          renderShell(); return;
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      if (!stopped) $('#inkStatus').textContent = 'Your payment went through. Ink can take a minute to arrive. Refresh this page shortly.';
+    }
   });
 
   /* Boot --------------------------------------------------------------------- */
