@@ -807,3 +807,56 @@ h1 .official { vertical-align: -0.08em; }
 @keyframes gfx-ember { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(var(--x), -60vh); opacity: 0; } }
 .gfx-feather { top: 30vh; width: 8px; height: 22px; border-radius: 50% 50% 50% 50% / 70% 70% 30% 30%; background: linear-gradient(#f5c542, #f97316); opacity: 0; animation: gfx-feather 1.6s ease-in var(--d) both; }
 @keyframes gfx-feather { 0% { transform: translate(0, 0) rotate(0); opacity: 0; } 15% { opacity: 1; } 100% { transform: translate(var(--x), 50vh) rotate(var(--r)); opacity: 0; } }
+
+/* ==========================================================================
+   Follow button, chapter-row gifts, reading progress, reader Auto theme,
+   editor autosave. (Added Nov 2026. Paste at the END of styles.css.)
+   ========================================================================== */
+
+/* Follow (bell) button on the series page and in the reader */
+.ico-bell { width: 17px; height: 17px; flex: none; }
+.series-cta .sub-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.ep-actions .subq .ico-bell, .ep-end .ico-bell { width: 15px; height: 15px; }
+.ep-end .btn { display: inline-flex; align-items: center; gap: 8px; }
+
+/* Series page: your progress through the whole series */
+.series-prog { margin-top: 16px; max-width: 420px; }
+.sp-row { display: flex; justify-content: space-between; gap: 12px; font-size: var(--t-xs); color: var(--graphite-3); margin-bottom: 6px; }
+.sp-row b { color: var(--graphite); font-weight: 700; }
+.sp-bar { height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--graphite) 10%, transparent); overflow: hidden; }
+.sp-bar i { display: block; height: 100%; border-radius: inherit; background: var(--ultra); }
+
+/* Chapter rows: gift button next to Read, and a thin bar for half-read chapters */
+.ep-list li.has-gift { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px; border-bottom: 1.5px solid var(--surface); }
+.ep-list li.has-gift > a { border-bottom: 0; }
+.ep-list .r.done { color: var(--graphite-2); font-weight: 600; }
+.ep-prog { margin-top: 6px; height: 4px; width: min(160px, 100%); border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.ep-prog i { display: block; height: 100%; background: var(--ultra); border-radius: inherit; }
+.ep-gift { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--ultra); background: transparent; border: 1.5px solid var(--line); transition: background var(--speed), border-color var(--speed); }
+.ep-gift:hover, .ep-gift:focus-visible { background: var(--ultra-soft); border-color: var(--ultra-soft); }
+.ep-gift .ico-gift { width: 18px; height: 18px; }
+:root[data-theme="dark"] .ep-gift { color: #ff6b7f; }
+
+/* Reader: chapter progress bar (stays visible when the top bar hides) */
+.rd-progress { width: 100%; height: 4px; background: transparent; transition: none; pointer-events: none; }
+.rd-progress i { display: block; height: 100%; width: 0; background: var(--ultra); border-radius: 0 999px 999px 0; transition: width 80ms linear; }
+.reader.chrome-hidden .rd-progress { background: color-mix(in srgb, var(--rd-fg) 10%, transparent); }
+.rd-top .meta .e { display: flex; min-width: 0; }
+.rd-top .meta .e #rdNow { overflow: hidden; text-overflow: ellipsis; }
+.rd-left { flex: none; color: var(--rd-muted); font-weight: 500; margin-left: 2px; }
+@media (max-width: 480px) { .rd-left { display: none; } }
+
+/* Reader theme: Auto swatch + hint */
+.seg .sw-auto { background: linear-gradient(135deg, #fff 50%, #121317 50%); }
+.rd-hint { margin: 8px 2px 0; font-size: var(--t-xs); color: var(--rd-muted); }
+.rd-settings .seg button { padding: 0 6px; font-size: var(--t-xs); }
+
+/* Editor autosave */
+.save-state { font-size: var(--t-xs); color: var(--graphite-3); max-width: 34ch; }
+.save-state.ok::before { content: "✓ "; color: #1f8a4c; font-weight: 700; }
+.save-state.saving { color: var(--graphite-2); }
+.save-state.local { color: var(--graphite-2); }
+.save-state.warn { color: var(--danger); }
+.ed-top .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.restore-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 0; padding: 12px 14px; border-radius: var(--r); background: var(--ultra-soft); color: var(--graphite); font-size: var(--t-sm); }
+.restore-bar span { flex: 1 1 240px; }
