@@ -476,7 +476,7 @@
     const b = badge ? (api.novels.hasUpToday(n) ? '<span class="badge badge-up">UP</span>' : api.novels.isNew(n) ? '<span class="badge badge-new">NEW</span>' : '') : '';
     return `<div class="thumb ${sm ? 'sm' : ''} ${n.cover_image ? 'has-image' : ''}" style="--cv:${esc(n.cover_color)};${n.cover_image ? `background-image:url('${esc(n.cover_image)}')` : ''}" aria-hidden="true">${b}${n.cover_image ? '' : `<span class="big">${esc(initial(n.title))}</span>`}<span class="tt">${esc(n.title || 'Untitled')}</span></div>`;
   };
-  const sCard = (n) => { const a = api.users.byId(n.author_id); const st = api.novels.stats(n); return `<a class="s-card" href="#/novel/${esc(n.slug)}">${thumb(n)}<div class="st">${esc(n.title)}</div><div class="sm">${nm(a)} · ${compact(st.subs)} ${pl(st.subs, 'subscriber')}</div></a>`; };
+  const sCard = (n) => { const a = api.users.byId(n.author_id); const st = api.novels.stats(n); return `<a class="s-card" href="#/novel/${esc(n.slug)}">${thumb(n)}<div class="st">${esc(n.title)}</div><div class="sm">${nm(a)} · ${compact(st.subs)} ${pl(st.subs, 'follower')}</div></a>`; };
   const rail = (list) => `<div class="rail">${list.map(sCard).join('')}</div>`;
   const dayLink = (d, sel, today) => `<a href="#/daily/${d}" class="${d === sel ? 'on' : ''} ${d === today ? 'today' : ''}"><span>${DAYS[d]}</span>${d === today ? '<span class="d">today</span>' : ''}</a>`;
 
@@ -506,7 +506,7 @@
         </a>
         <div class="feat-info">
           <div><div class="feat-by">${esc(n.genres[0] || 'Series')} by <a href="#/u/${esc(a.username)}">${nm(a)}</a></div><p>${esc(n.synopsis)}</p></div>
-          <ul class="feat-stats"><li><b>${compact(st.subs)}</b> ${pl(st.subs, 'subscriber')}</li><li><b>${st.chapters}</b> ${st.chapters === 1 ? 'chapter' : 'chapters'}</li><li><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</li></ul>
+          <ul class="feat-stats"><li><b>${compact(st.subs)}</b> ${pl(st.subs, 'follower')}</li><li><b>${st.chapters}</b> ${st.chapters === 1 ? 'chapter' : 'chapters'}</li><li><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</li></ul>
         </div></article>`;
     };
 
@@ -539,7 +539,7 @@
         const chs = api.novels.published(n.id); const prog = api.progress.get(me.id, n.id); const at = prog ? chs.findIndex((c) => c.id === prog) + 1 : 0;
         const pct = chs.length ? Math.round((at / chs.length) * 100) : 0;
         return `<li class="fav"><a href="#/novel/${esc(n.slug)}" tabindex="-1" aria-hidden="true">${thumb(n, { sm: true })}</a><div class="fav-main"><a class="fav-t" href="#/novel/${esc(n.slug)}">${esc(n.title)}</a>
-          <div class="fav-m">${esc(n.genres[0] || '')}${n.genres[0] ? ', ' : ''}${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}</div>
+          <div class="fav-m">${esc(n.genres[0] || '')}${n.genres[0] ? ', ' : ''}${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'follower')}</div>
           <div class="fav-m">${at ? `Read ${at} of ${chs.length}` : `${plural(chs.length, 'chapter')}, not started`}</div>
           <div class="fav-bar" aria-hidden="true"><i style="width:${pct}%"></i></div></div>
           <a class="go" href="#/novel/${esc(n.slug)}/ch/${at && at < chs.length ? at + 1 : Math.max(at, 1)}" aria-label="${at ? 'Continue' : 'Start'} ${esc(n.title)}">${ICON_PLAY}</a></li>`;
@@ -618,13 +618,30 @@
     list.sort((x, y) => sort === 'updated' ? (y.n.last_published_at || 0) - (x.n.last_published_at || 0) : sort === 'new' ? y.n.created_at - x.n.created_at : sort === 'subs' ? y.st.subs - x.st.subs : y.st.trend - x.st.trend);
     const link = (patch) => '#/browse?' + new URLSearchParams(Object.fromEntries(Object.entries({ q: query.q, genre, sort, ...patch }).filter(([, v]) => v))).toString();
     app.innerHTML = `<div class="browse-head"><div><h1>${q ? `Results for “${esc(query.q)}”` : genre ? esc(genre) : 'All series'}</h1><p class="muted small" style="margin:4px 0 0">${plural(list.length, 'series', 'series')}</p></div>
-      <select class="select" id="sortSel" aria-label="Sort" style="width:auto"><option value="trending" ${sort === 'trending' ? 'selected' : ''}>Trending</option><option value="subs" ${sort === 'subs' ? 'selected' : ''}>Most subscribed</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently updated</option><option value="new" ${sort === 'new' ? 'selected' : ''}>Newest</option></select></div>
+      <select class="select" id="sortSel" aria-label="Sort" style="width:auto"><option value="trending" ${sort === 'trending' ? 'selected' : ''}>Trending</option><option value="subs" ${sort === 'subs' ? 'selected' : ''}>Most followed</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently updated</option><option value="new" ${sort === 'new' ? 'selected' : ''}>Newest</option></select></div>
       <div class="chip-set"><a class="chip ${!genre ? 'on' : ''}" href="${link({ genre: '' })}">All</a>${GENRES.map((g) => `<a class="chip ${genre === g ? 'on' : ''}" href="${link({ genre: g })}">${esc(g)}</a>`).join('')}</div>
       <div class="grid">${list.map(({ n }) => sCard(n)).join('') || `<div class="empty" style="grid-column:1/-1"><h3>No series match</h3><p>Try another word or clear the genre.</p><a class="btn btn-ghost btn-sm" href="#/browse">Clear filters</a></div>`}</div>`;
     $('#sortSel').addEventListener('change', (e) => go(link({ sort: e.target.value })));
   });
 
   /* 6d. Novel landing page -------------------------------------------------- */
+  /* Follow (was "Subscribe": the word is saved for paid writer subscriptions later).
+     The database table is still called subscriptions; only the words readers see changed. */
+  const ICON_BELL = '<svg class="ico-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
+  const followLabel = (on, long = false) => (on ? `${ICON_BELL}Following` : `${ICON_BELL}${long ? 'Follow for updates' : 'Follow'}`);
+
+  /* How far into each chapter a reader got, saved in this browser.
+     p = where they are now (0-100), d = finished it at least once. */
+  const readPos = {
+    all() { try { return JSON.parse(localStorage.getItem('sfb.readpos') || '{}'); } catch { return {}; } },
+    get: (chId) => readPos.all()[chId] || { p: 0, d: false },
+    set(chId, pct) {
+      const all = readPos.all(); const prev = all[chId] || { p: 0, d: false };
+      all[chId] = { p: Math.round(pct), d: prev.d || pct >= 97 };
+      try { localStorage.setItem('sfb.readpos', JSON.stringify(all)); } catch {}
+    },
+  };
+
   route('/novel/:slug', async ({ app, params, query }) => {
     const n = api.novels.bySlug(params.slug); const me = auth.current();
     if (!n) return notFound(app, 'That series does not exist.');
@@ -632,29 +649,54 @@
     if (!api.novels.isPublic(n) && !mine) return notFound(app, 'This series has not been published yet.');
     setTitle(n.title);
     const a = api.users.byId(n.author_id); const chs = api.novels.published(n.id); const st = api.novels.stats(n);
-    const subbed = me ? api.subscriptions.has(me.id, n.id) : false;
+    const following = me ? api.subscriptions.has(me.id, n.id) : false;
     const faved = me ? api.favorites.has(me.id, n.id) : false;
     const prog = me ? api.progress.get(me.id, n.id) : null; const progIdx = prog ? chs.findIndex((c) => c.id === prog) : -1;
     const readSet = me ? api.progress.readSet(me.id) : new Set();
+    const canGift = gifting.ready && !mine && api.novels.isPublic(n);
     const asc = query.sort === 'asc';
     const list = asc ? chs : [...chs].reverse();
+
+    // A chapter counts as read if the reader finished it, or has moved past it.
+    const chState = (c, i) => { const pos = readPos.get(c.id); const done = pos.d || (progIdx > i) || (readSet.has(c.id) && pos.p >= 97); return { done, pct: done ? 100 : pos.p }; };
+    const states = chs.map(chState);
+    const doneCount = states.filter((s) => s.done).length;
+    const overall = chs.length ? Math.round(states.reduce((t, s) => t + s.pct, 0) / chs.length) : 0;
+    const started = states.some((s) => s.pct > 0);
+    const resumeIdx = progIdx >= 0 ? progIdx : 0;
+
+    const row = (c) => {
+      const i = chs.indexOf(c); const s = states[i]; const isNew = c.published_at > now() - 7 * DAY;
+      const right = s.done ? '<span class="r done">✓ Read</span>' : s.pct > 0 ? `<span class="r">${s.pct}%</span>` : '<span class="r"></span>';
+      return `<li class="${s.done ? 'read' : ''}${canGift ? ' has-gift' : ''}">
+        <a href="#/novel/${esc(n.slug)}/ch/${i + 1}"><span class="n"><small>Ch.</small>${i + 1}</span>
+          <div><div class="t">${esc(c.title)}${isNew ? '<span class="badge badge-up">NEW</span>' : ''}</div>
+            <div class="m">${esc(fmtDate(c.published_at))} · ${readMin(wordCount(c.content))} min · ♥ ${compact(c.likes)}<span class="row-gifts" data-row-gifts="${c.id}">${c.gift_count ? ` · ${giftCountText(c.gift_count)}` : ''}</span></div>
+            ${!s.done && s.pct > 0 ? `<div class="ep-prog" aria-hidden="true"><i style="width:${s.pct}%"></i></div>` : ''}</div>
+          ${right}</a>
+        ${canGift ? `<button type="button" class="ep-gift" data-gift-ch="${c.id}" aria-label="Send a gift for chapter ${i + 1}" title="Gift this chapter">${ICON_GIFT}</button>` : ''}
+      </li>`;
+    };
+
     app.innerHTML = `
       ${mine && !api.novels.isPublic(n) ? `<div class="pub-state" style="margin-top:16px">Draft preview. Only you can see this. <a href="#/studio/novel/${n.id}">Manage in Studio</a></div>` : ''}
       <div class="series-band" style="--cv:${esc(n.cover_color)}">
         <div class="series-top">${thumb(n, { badge: false })}
           <div><div class="chip-set" style="margin-bottom:8px">${n.genres.map((g) => `<a class="chip" href="#/browse?genre=${encodeURIComponent(g)}">${esc(g)}</a>`).join('')}</div>
             <h1>${esc(n.title)}</h1><div class="by">by <a href="#/u/${esc(a.username)}">${nm(a)}</a></div>
-            <div class="series-meta"><span><b>${compact(st.subs)}</b> ${pl(st.subs, 'subscriber')}</span><span><b>${compact(st.views)}</b> ${pl(st.views, 'view')}</span><span><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</span>${gifting.ready ? `<span class="gift-pill" id="giftCount">${giftCountText(n.gift_count)}</span>` : ''}<span>${n.status === 'completed' ? '<b>Completed</b>' : n.update_day === null ? '<b>Ongoing</b>' : `Updates <b>${DAYS_LONG[n.update_day]}s</b>`}</span></div>
+            <div class="series-meta"><span><b>${compact(st.subs)}</b> ${pl(st.subs, 'follower')}</span><span><b>${compact(st.views)}</b> ${pl(st.views, 'view')}</span><span><b>${compact(st.likes)}</b> ${pl(st.likes, 'like')}</span>${gifting.ready ? `<span class="gift-pill" id="giftCount">${giftCountText(n.gift_count)}</span>` : ''}<span>${n.status === 'completed' ? '<b>Completed</b>' : n.update_day === null ? '<b>Ongoing</b>' : `Updates <b>${DAYS_LONG[n.update_day]}s</b>`}</span></div>
             <div class="series-cta">
-              ${chs.length ? `<a class="btn btn-primary btn-lg" href="#/novel/${esc(n.slug)}/ch/${progIdx > 0 ? progIdx + 1 : 1}">${progIdx > 0 ? `Continue · Ch. ${progIdx + 1}` : 'Read first chapter'}</a>` : '<span></span>'}
-              <button class="btn btn-ghost btn-lg sub-btn" id="subBtn" aria-pressed="${subbed}">${subbed ? '✓ Subscribed' : '+ Subscribe'}</button>
+              ${chs.length ? `<a class="btn btn-primary btn-lg" href="#/novel/${esc(n.slug)}/ch/${started ? resumeIdx + 1 : 1}">${started ? `Continue · Ch. ${resumeIdx + 1}` : 'Read first chapter'}</a>` : '<span></span>'}
+              <button class="btn btn-ghost btn-lg sub-btn" id="subBtn" aria-pressed="${following}">${followLabel(following)}</button>
               <button class="btn btn-ghost btn-lg fav-btn" id="favBtn" aria-pressed="${faved}">${faved ? '★ Favorited' : '☆ Favorite'}</button>
-              ${gifting.ready && !mine && api.novels.isPublic(n) ? `<button class="btn btn-ghost btn-lg gift-btn" id="giftBtn">${ICON_GIFT}Send a gift</button>` : ''}
-            </div></div></div></div>
+              ${canGift ? `<button class="btn btn-ghost btn-lg gift-btn" id="giftBtn">${ICON_GIFT}Gift series</button>` : ''}
+            </div>
+            ${me && started && chs.length ? `<div class="series-prog"><div class="sp-row"><span>Your progress</span><b>${doneCount} of ${plural(chs.length, 'chapter')} read</b></div><div class="sp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${overall}" aria-label="Series progress"><i style="width:${overall}%"></i></div></div>` : ''}
+          </div></div></div>
       <div class="series-body series-layout">
         <div>
           <div class="ep-head"><h2>${plural(chs.length, 'chapter')}</h2><button class="btn btn-soft btn-sm" id="sortBtn">${asc ? 'Oldest first' : 'Newest first'}</button></div>
-          <ol class="ep-list">${list.map((c) => { const i = chs.indexOf(c); const isNew = c.published_at > now() - 7 * DAY; return `<li class="${readSet.has(c.id) ? 'read' : ''}"><a href="#/novel/${esc(n.slug)}/ch/${i + 1}"><span class="n"><small>Ch.</small>${i + 1}</span><div><div class="t">${esc(c.title)}${isNew ? '<span class="badge badge-up">NEW</span>' : ''}</div><div class="m">${esc(fmtDate(c.published_at))} · ${readMin(wordCount(c.content))} min · ♥ ${compact(c.likes)}<span class="row-gifts" data-row-gifts="${c.id}">${c.gift_count ? ` · ${giftCountText(c.gift_count)}` : ''}</span></div></div><span class="r">${readSet.has(c.id) ? 'Read' : ''}</span></a></li>`; }).join('') || '<li class="muted small" style="padding:12px 0">No chapters published yet.</li>'}</ol>
+          <ol class="ep-list" id="epList">${list.map(row).join('') || '<li class="muted small" style="padding:12px 0">No chapters published yet.</li>'}</ol>
         </div>
         <aside>
           <h2 style="font-size:var(--t-md);margin:24px 0 8px">About</h2>
@@ -664,21 +706,25 @@
           <a class="author-row" href="#/u/${esc(a.username)}">${crownedAvatar(a)}<div><div class="n">${nm(a)}</div><div class="b">${esc(a.bio) || 'No bio yet.'}</div></div></a>
           ${mine ? `<a class="btn btn-ghost btn-block" style="margin-top:14px" href="#/studio/novel/${n.id}">Edit in Studio</a>` : ''}
         </aside></div>`;
+
     if (gifting.ready) paintSupporters(n, $('#supporters'), mine);
-    $('#giftBtn')?.addEventListener('click', () => openGiftSheet({
-      novel: n,
-      onSent: () => {
-        $('#giftCount').textContent = giftCountText(n.gift_count);
-        paintSupporters(n, $('#supporters'), mine);
-        const av = $('.author-row .av-wrap'); if (av) av.outerHTML = crownedAvatar(a);
-      },
-    }));
+    const afterGift = ({ chapterId } = {}) => {
+      $('#giftCount').textContent = giftCountText(n.gift_count);
+      if (chapterId) { const el = $(`[data-row-gifts="${chapterId}"]`); if (el) el.textContent = ` · ${giftCountText(api.chapters.byId(chapterId).gift_count)}`; }
+      paintSupporters(n, $('#supporters'), mine);
+      const av = $('.author-row .av-wrap'); if (av) av.outerHTML = crownedAvatar(a);
+    };
+    $('#giftBtn')?.addEventListener('click', () => openGiftSheet({ novel: n, onSent: afterGift }));
+    $('#epList').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-gift-ch]'); if (!b) return;
+      openGiftSheet({ novel: n, chapter: api.chapters.byId(b.dataset.giftCh), onSent: afterGift });
+    });
     $('#sortBtn').addEventListener('click', () => go(`/novel/${n.slug}${asc ? '' : '?sort=asc'}`));
     $('#synMore').addEventListener('click', () => { const s = $('#syn'); s.classList.toggle('clamp'); $('#synMore').textContent = s.classList.contains('clamp') ? 'Read more' : 'Show less'; });
     $('#subBtn').addEventListener('click', async () => {
       if (!requireAuth()) return;
       const on = await api.subscriptions.toggle(me.id, n.id);
-      toast(on ? `Subscribed. You will be notified when ${a.name} posts a new chapter.` : 'Unsubscribed'); render();
+      toast(on ? `Following ${n.title}. You’ll be notified when ${a.name} posts a new chapter.` : `Unfollowed ${n.title}`); render();
     });
     $('#favBtn').addEventListener('click', async () => {
       if (!requireAuth()) return;
@@ -688,11 +734,22 @@
   });
 
   /* 6e. Reader (continuous scroll) ------------------------------------------ */
+  /* Reader theme: 'auto' follows the site theme (Light/Dark/System in the account menu).
+     Older saved settings always stored 'light' even if the reader never picked it, which is
+     why the reader stayed white in dark mode. v:2 resets that once to 'auto'. */
+  const READER_DEFAULTS = { v: 2, theme: 'auto', size: 18, lh: 'normal', font: 'serif' };
   const prefs = {
-    get: () => { try { return { theme: 'light', size: 18, lh: 'normal', font: 'serif', ...JSON.parse(localStorage.getItem('sfb.prefs') || localStorage.getItem('chapterhouse.v2.prefs') || '{}') }; } catch { return { theme: 'light', size: 18, lh: 'normal', font: 'serif' }; } },
+    get: () => {
+      try {
+        const saved = JSON.parse(localStorage.getItem('sfb.prefs') || localStorage.getItem('chapterhouse.v2.prefs') || '{}');
+        if (saved.v !== 2) { saved.theme = 'auto'; saved.v = 2; }
+        return { ...READER_DEFAULTS, ...saved };
+      } catch { return { ...READER_DEFAULTS }; }
+    },
     set: (p) => { try { localStorage.setItem('sfb.prefs', JSON.stringify({ ...prefs.get(), ...p })); localStorage.removeItem('chapterhouse.v2.prefs'); } catch {} },
   };
   const LH = { tight: 1.5, normal: 1.7, loose: 1.95 };
+  const readerTheme = (t) => (t === 'auto' ? (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light') : t);
 
   route('/novel/:slug/ch/:n', async ({ app, params }) => {
     const n = api.novels.bySlug(params.slug); const me = auth.current();
@@ -702,25 +759,28 @@
     const chs = api.novels.published(n.id); const startIdx = parseInt(params.n, 10) - 1;
     if (!chs[startIdx]) return notFound(app, 'That chapter does not exist.');
     const a = api.users.byId(n.author_id); const p = prefs.get();
+    const following = () => (me ? api.subscriptions.has(me.id, n.id) : false);
     document.body.classList.add('reading');
 
     const svgBack = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
     const svgList = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
     const svgType = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>';
 
-    app.innerHTML = `<div class="reader" id="reader" data-theme="${esc(p.theme)}" data-font="${esc(p.font)}" style="--rd-size:${p.size}px;--rd-lh:${LH[p.lh] || 1.7}">
-      <div class="rd-progress" id="rdProgress"></div>
+    app.innerHTML = `<div class="reader" id="reader" data-theme="${esc(readerTheme(p.theme))}" data-font="${esc(p.font)}" style="--rd-size:${p.size}px;--rd-lh:${LH[p.lh] || 1.7}">
+      <div class="rd-progress" id="rdProgress" role="progressbar" aria-label="Chapter progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="rdBar"></i></div>
       <div class="rd-top" id="rdTop"><div class="rd-top-in">
         <a class="back" href="#/novel/${esc(n.slug)}" aria-label="Back to series">${svgBack}</a>
-        <div class="meta"><div class="s">${esc(n.title)}</div><div class="e" id="rdNow"></div></div>
+        <div class="meta"><div class="s">${esc(n.title)}</div><div class="e"><span id="rdNow"></span><span class="rd-left" id="rdLeft"></span></div></div>
         <button class="tool" id="rdSettingsBtn" aria-expanded="false" aria-controls="rdSettings" aria-label="Reading settings">${svgType}</button>
         <a class="tool" href="#/novel/${esc(n.slug)}" aria-label="Chapter list">${svgList}</a>
       </div></div>
       <div class="rd-settings" id="rdSettings" hidden>
         <div class="grp"><div class="lbl">Theme</div><div class="seg" id="segTheme">
+          <button data-v="auto" aria-pressed="${p.theme === 'auto'}"><span class="sw sw-auto"></span>Auto</button>
           <button data-v="light" aria-pressed="${p.theme === 'light'}"><span class="sw" style="background:#fff"></span>Light</button>
           <button data-v="sepia" aria-pressed="${p.theme === 'sepia'}"><span class="sw" style="background:#f3ead8"></span>Sepia</button>
-          <button data-v="dark" aria-pressed="${p.theme === 'dark'}"><span class="sw" style="background:#121317"></span>Dark</button></div></div>
+          <button data-v="dark" aria-pressed="${p.theme === 'dark'}"><span class="sw" style="background:#121317"></span>Dark</button></div>
+          <p class="rd-hint">Auto matches the site theme from your account menu.</p></div>
         <div class="grp"><div class="lbl">Text size</div><div class="stepper"><button id="szDown" aria-label="Smaller text">A−</button><output id="szOut">${p.size}px</output><button id="szUp" aria-label="Larger text">A+</button></div></div>
         <div class="grp"><div class="lbl">Line spacing</div><div class="seg" id="segLh"><button data-v="tight" aria-pressed="${p.lh === 'tight'}">Tight</button><button data-v="normal" aria-pressed="${p.lh === 'normal'}">Normal</button><button data-v="loose" aria-pressed="${p.lh === 'loose'}">Loose</button></div></div>
         <div class="grp"><div class="lbl">Typeface</div><div class="seg" id="segFont"><button data-v="serif" aria-pressed="${p.font === 'serif'}" style="font-family:var(--read)">Serif</button><button data-v="sans" aria-pressed="${p.font === 'sans'}">Sans</button></div></div>
@@ -743,7 +803,7 @@
         ${c.author_note ? `<aside class="note"><span class="avatar" aria-hidden="true">${esc(initials(a.name))}</span><div><div class="nh">Author's note</div><div class="nn">${nm(a)}</div><div class="nb">${esc(c.author_note)}</div></div></aside>` : ''}
         <div class="ep-actions">
           <button class="like" data-like="${c.id}" aria-pressed="${me ? api.likes.has(me.id, c.id) : false}">♥ <span>${compact(c.likes)}</span></button>
-          <button class="subq" data-sub aria-pressed="${me ? api.subscriptions.has(me.id, n.id) : false}">${me && api.subscriptions.has(me.id, n.id) ? '✓ Subscribed' : '+ Subscribe'}</button>
+          <button class="subq" data-sub aria-pressed="${following()}">${followLabel(following())}</button>
           <span class="sp"></span>
           ${idx + 1 < chs.length ? `<a href="#/novel/${esc(n.slug)}/ch/${idx + 2}" data-next="${idx + 1}">Next chapter</a>` : ''}
         </div>
@@ -751,7 +811,7 @@
           ? `<div class="gift-band mine"><span class="gb-art">${giftSvg('candle', 40)}</span><div class="gb-t"><b>Gifts on this chapter</b><span data-gift-count="${c.id}">${giftCountText(c.gift_count, 'No gifts yet')}</span></div></div>`
           : `<div class="gift-band"><span class="gb-art">${giftSvg('candle', 40)}</span><div class="gb-t"><b>Enjoyed this chapter?</b><span>Send ${esc(a.name)} a gift. <span class="gb-count" data-gift-count="${c.id}">${c.gift_count ? giftCountText(c.gift_count) + ' so far.' : ''}</span></span></div><button type="button" class="gb-btn" data-gift="${c.id}">${ICON_GIFT}Send a gift</button></div>`}
         <section class="ep-comments" id="cmts-${c.id}"></section>
-        ${idx + 1 < chs.length ? `<div class="ep-next" data-sentinel="${idx + 1}"></div>` : `<div class="ep-end"><b>You are caught up</b>${n.update_day !== null ? `New chapters arrive on ${DAYS_LONG[n.update_day]}s.` : 'More is on the way.'}<br><button class="btn btn-sm" data-sub style="margin-top:12px">${me && api.subscriptions.has(me.id, n.id) ? '✓ Subscribed' : 'Subscribe for updates'}</button></div>`}
+        ${idx + 1 < chs.length ? `<div class="ep-next" data-sentinel="${idx + 1}"></div>` : `<div class="ep-end"><b>You are caught up</b>${n.update_day !== null ? `New chapters arrive on ${DAYS_LONG[n.update_day]}s.` : 'More is on the way.'}<br><button class="btn btn-sm" data-sub data-long aria-pressed="${following()}" style="margin-top:12px">${followLabel(following(), true)}</button></div>`}
       </article>`;
     };
 
@@ -790,18 +850,50 @@
       history.replaceState(null, '', `#/novel/${n.slug}/ch/${idx + 1}`);
       setTitle(`Ch. ${idx + 1} · ${n.title}`);
       if (me) api.progress.set(me.id, n.id, c.id);
+      updateProgress();
     }
 
+    /* Chapter progress: how far through the current chapter's text you are (not the whole page,
+       which keeps growing as chapters load). Also shows minutes left and saves your spot. */
+    let saveAt = 0;
+    function chapterPct(idx) {
+      const body = $(`#ch-${idx + 1} .ep-body`); if (!body) return -1;
+      const r = body.getBoundingClientRect(); const view = window.innerHeight;
+      const total = r.height - view * 0.6; if (total <= 0) return r.top < view ? 100 : 0;
+      return Math.min(100, Math.max(0, ((view * 0.4 - r.top) / total) * 100));
+    }
+    function updateProgress() {
+      const pct = chapterPct(current); const c = chs[current]; if (pct < 0) return;
+      $('#rdBar').style.width = pct + '%';
+      $('#rdProgress').setAttribute('aria-valuenow', String(Math.round(pct)));
+      const left = Math.ceil(readMin(wordCount(c.content)) * (1 - pct / 100));
+      $('#rdLeft').textContent = pct >= 99 ? ' · Finished' : ` · ${Math.round(pct)}% · ${left} min left`;
+      const t = Date.now(); if (t - saveAt > 600 || pct >= 97) { saveAt = t; readPos.set(c.id, pct); }
+    }
+
+    // Pick up where you left off in this chapter (read before anything saves a new position).
+    const spot = readPos.get(chs[startIdx].id);
     appendChapter(startIdx); setCurrent(startIdx);
+    if (spot.p > 3 && spot.p < 97) {
+      requestAnimationFrame(() => setTimeout(() => {
+        const body = $(`#ch-${startIdx + 1} .ep-body`); if (!body) return;
+        const r = body.getBoundingClientRect(); const view = window.innerHeight;
+        const y = window.scrollY + r.top - view * 0.4 + (spot.p / 100) * (r.height - view * 0.6);
+        window.scrollTo({ top: Math.max(0, y), behavior: 'instant' });
+        toast(`Picked up where you left off (${spot.p}%)`);
+      }, 60));
+    }
 
     // Hide chrome on scroll down, reveal on scroll up; progress bar.
     let lastY = window.scrollY;
     const onScroll = () => {
       const y = window.scrollY; const dy = y - lastY; lastY = y;
-      if (Math.abs(dy) > 6 && settings.hidden) { const hide = dy > 0 && y > 80; $('#rdTop').classList.toggle('hide', hide); $('#rdBottom').classList.toggle('hide', hide); }
-      const h = document.documentElement; $('#rdProgress').style.width = Math.min(100, (y / Math.max(1, h.scrollHeight - h.clientHeight)) * 100) + '%';
+      if (Math.abs(dy) > 6 && settings.hidden) { const hide = dy > 0 && y > 80; $('#rdTop').classList.toggle('hide', hide); $('#rdBottom').classList.toggle('hide', hide); reader.classList.toggle('chrome-hidden', hide); }
+      updateProgress();
     };
     window.addEventListener('scroll', onScroll, { passive: true });
+    const saveOnLeave = () => { const c = chs[current]; const pct = chapterPct(current); if (c && pct >= 0) readPos.set(c.id, pct); };
+    window.addEventListener('pagehide', saveOnLeave);
 
     // Settings popover
     const settings = $('#rdSettings'), sBtn = $('#rdSettingsBtn');
@@ -810,11 +902,14 @@
     const onDocClick = (e) => { if (!settings.hidden && !settings.contains(e.target) && e.target !== sBtn && !sBtn.contains(e.target)) closeSettings(); };
     document.addEventListener('click', onDocClick);
     const seg = (id, key, apply) => $(id).addEventListener('click', (e) => { const b = e.target.closest('button[data-v]'); if (!b) return; prefs.set({ [key]: b.dataset.v }); $$('button', $(id)).forEach((x) => x.setAttribute('aria-pressed', x === b)); apply(b.dataset.v); });
-    seg('#segTheme', 'theme', (v) => { reader.dataset.theme = v; });
-    seg('#segLh', 'lh', (v) => reader.style.setProperty('--rd-lh', LH[v]));
-    seg('#segFont', 'font', (v) => { reader.dataset.font = v; });
-    const setSize = (d) => { const size = Math.min(26, Math.max(14, prefs.get().size + d)); prefs.set({ size }); reader.style.setProperty('--rd-size', size + 'px'); $('#szOut').textContent = size + 'px'; };
+    seg('#segTheme', 'theme', (v) => { reader.dataset.theme = readerTheme(v); });
+    seg('#segLh', 'lh', (v) => { reader.style.setProperty('--rd-lh', LH[v]); updateProgress(); });
+    seg('#segFont', 'font', (v) => { reader.dataset.font = v; updateProgress(); });
+    const setSize = (d) => { const size = Math.min(26, Math.max(14, prefs.get().size + d)); prefs.set({ size }); reader.style.setProperty('--rd-size', size + 'px'); $('#szOut').textContent = size + 'px'; updateProgress(); };
     $('#szDown').addEventListener('click', () => setSize(-1)); $('#szUp').addEventListener('click', () => setSize(1));
+    // If the reader is on Auto and the site theme changes (e.g. System and the device flips), follow it.
+    const themeObs = new MutationObserver(() => { if (prefs.get().theme === 'auto') reader.dataset.theme = readerTheme('auto'); });
+    themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     // Bottom nav
     $('#navSel').addEventListener('change', (e) => go(`/novel/${n.slug}/ch/${e.target.value}`));
@@ -829,11 +924,16 @@
       }
       const like = e.target.closest('[data-like]'); const sub = e.target.closest('[data-sub]');
       if (like) { if (!requireAuth()) return; const on = await api.likes.toggle(me.id, like.dataset.like); like.setAttribute('aria-pressed', on); like.querySelector('span').textContent = compact(api.chapters.byId(like.dataset.like).likes); }
-      if (sub) { if (!requireAuth()) return; const on = await api.subscriptions.toggle(me.id, n.id); $$('[data-sub]', canvas).forEach((b) => { b.setAttribute('aria-pressed', on); b.textContent = on ? '✓ Subscribed' : (b.classList.contains('btn') ? 'Subscribe for updates' : '+ Subscribe'); }); toast(on ? `Subscribed to ${n.title}` : 'Unsubscribed'); }
+      if (sub) {
+        if (!requireAuth()) return;
+        const on = await api.subscriptions.toggle(me.id, n.id);
+        $$('[data-sub]', canvas).forEach((b) => { b.setAttribute('aria-pressed', on); b.innerHTML = followLabel(on, b.hasAttribute('data-long')); });
+        toast(on ? `Following ${n.title}. You’ll hear about new chapters.` : `Unfollowed ${n.title}`);
+      }
     });
     const onKey = (e) => { if (e.target.matches('input, textarea, select, [contenteditable]')) return; if (e.key === 'ArrowRight' && current + 1 < chs.length) go(`/novel/${n.slug}/ch/${current + 2}`); if (e.key === 'ArrowLeft' && current > 0) go(`/novel/${n.slug}/ch/${current}`); if (e.key === 'Escape') closeSettings(); };
     document.addEventListener('keydown', onKey);
-    cleanup = () => { io.disconnect(); headIO.disconnect(); window.removeEventListener('scroll', onScroll); document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); };
+    cleanup = () => { saveOnLeave(); io.disconnect(); headIO.disconnect(); themeObs.disconnect(); window.removeEventListener('scroll', onScroll); window.removeEventListener('pagehide', saveOnLeave); document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); };
   });
 
   /* 6f. Auth views ---------------------------------------------------------- */
@@ -848,7 +948,7 @@
   });
   route('/signup', async ({ app, query }) => {
     setTitle('Sign up');
-    app.innerHTML = `<section class="auth"><h1>Create your account</h1><p class="lead">Subscribe to series, comment on chapters, write your own.</p>
+    app.innerHTML = `<section class="auth"><h1>Create your account</h1><p class="lead">Follow series, comment on chapters, write your own.</p>
       <form id="signupForm" novalidate>
       <div class="field"><label for="su_name">Display name</label><input class="input" id="su_name" autocomplete="name" required></div>
       <div class="field"><label for="su_user">Username</label><input class="input" id="su_user" autocomplete="username" required><span class="hint">Letters, numbers, underscores. This is your public handle.</span></div>
@@ -885,7 +985,7 @@
       <section class="section"><div class="section-head"><h2>Friends<span class="sub">${friends.length}</span></h2></div>${friends.length ? `<ul class="friend-chips">${friends.map((f) => `<li><a href="#/u/${esc(f.username)}"><span class="avatar" aria-hidden="true">${esc(initials(f.name))}</span>${esc(f.name)}</a></li>`).join('')}</ul>` : `<div class="empty"><h3>No friends yet</h3><p>${mine ? 'Open someone’s profile and choose Add friend.' : 'Send a friend request to be the first.'}</p></div>`}</section>
       <section class="section"><div class="section-head"><h2>Favorites<span class="sub">${favs.length}</span></h2></div><div class="grid">${favs.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>No favorites yet</h3><p>${mine ? 'Choose Favorite on a series page to keep it here.' : 'Nothing favorited yet.'}</p></div>`}</div></section>
       <section class="section"><div class="section-head"><h2>${mine ? 'Your series' : `Series by ${esc(u.name)}`}</h2></div><div class="grid">${published.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>Nothing published yet</h3><p>${mine ? 'Series you publish show up here.' : 'Check back later.'}</p>${mine ? '<a class="btn btn-sm" href="#/studio">Open Studio</a>' : ''}</div>`}</div></section>
-      <section class="section"><div class="section-head"><h2>Subscriptions<span class="sub">${subs.length}</span></h2></div><div class="grid">${subs.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>No subscriptions yet</h3><p>Subscribe to a series and new chapters will show up in your notifications.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div>`}</div></section>`;
+      <section class="section"><div class="section-head"><h2>Following<span class="sub">${subs.length}</span></h2></div><div class="grid">${subs.map(sCard).join('') || `<div class="empty" style="grid-column:1/-1"><h3>Not following anything yet</h3><p>Follow a series and new chapters will show up in your notifications.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div>`}</div></section>`;
     $('#logoutBtn')?.addEventListener('click', async () => { await auth.logout(); toast('Logged out'); if (location.hash === '#/') render(); else go('/'); });
     $$('[data-fr]', app).forEach((b) => b.addEventListener('click', async () => {
       if (!requireAuth()) return;
@@ -907,9 +1007,9 @@
     setTitle('Notifications'); const me = auth.current();
     const list = api.notifications.forUser(me.id);
     const reqs = api.friends.incoming(me.id).map((r) => api.users.byId(r.from)).filter(Boolean);
-    app.innerHTML = `<div class="studio-head"><div><h1>Notifications</h1><p class="lead">Friend requests and new chapters from series you subscribe to.</p></div></div>
+    app.innerHTML = `<div class="studio-head"><div><h1>Notifications</h1><p class="lead">Friend requests and new chapters from series you follow.</p></div></div>
       ${reqs.length ? `<ul class="req-list" id="reqList">${reqs.map((u) => `<li class="fr fr-req">${userLink(u)}<div class="fr-main"><a class="fr-name" href="#/u/${esc(u.username)}">${esc(u.name)}</a><div class="fr-act">Wants to be friends</div><div class="row fr-btns"><button class="btn btn-primary btn-sm" data-accept="${u.id}">Accept</button><button class="btn btn-ghost btn-sm" data-decline="${u.id}">Decline</button></div></div></li>`).join('')}</ul>` : ''}
-      <ul class="notif">${list.map((x) => { const n = api.novels.byId(x.novel_id); const c = api.chapters.byId(x.chapter_id); if (!n || !c) return ''; const a = api.users.byId(n.author_id); const i = api.novels.published(n.id).indexOf(c); return `<li class="${x.read_at ? '' : 'unread'}"><a href="#/novel/${esc(n.slug)}">${thumb(n, { sm: true, badge: false })}</a><div><a class="t" href="#/novel/${esc(n.slug)}/ch/${i + 1}">${esc(a.name)} posted Chapter ${c.chapter_number} of ${esc(n.title)}: ${esc(c.title)}</a><div class="m">${esc(timeAgo(x.created_at))}</div></div></li>`; }).join('') || `<li style="display:block;padding:0"><div class="empty"><h3>Nothing yet</h3><p>Subscribe to a series and you will hear about every new chapter here.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div></li>`}</ul>`;
+      <ul class="notif">${list.map((x) => { const n = api.novels.byId(x.novel_id); const c = api.chapters.byId(x.chapter_id); if (!n || !c) return ''; const a = api.users.byId(n.author_id); const i = api.novels.published(n.id).indexOf(c); return `<li class="${x.read_at ? '' : 'unread'}"><a href="#/novel/${esc(n.slug)}">${thumb(n, { sm: true, badge: false })}</a><div><a class="t" href="#/novel/${esc(n.slug)}/ch/${i + 1}">${esc(a.name)} posted Chapter ${c.chapter_number} of ${esc(n.title)}: ${esc(c.title)}</a><div class="m">${esc(timeAgo(x.created_at))}</div></div></li>`; }).join('') || `<li style="display:block;padding:0"><div class="empty"><h3>Nothing yet</h3><p>Follow a series and you will hear about every new chapter here.</p><a class="btn btn-ghost btn-sm" href="#/browse">Browse series</a></div></li>`}</ul>`;
     $('#reqList')?.addEventListener('click', async (e) => {
       const acc = e.target.closest('[data-accept]'); const dec = e.target.closest('[data-decline]');
       if (acc) { await api.friends.accept(me.id, acc.dataset.accept); toast(`You and ${api.users.byId(acc.dataset.accept).name} are now friends`); render(); }
@@ -924,7 +1024,7 @@
     setTitle('Studio'); const me = auth.current(); const list = api.novels.byAuthor(me.id);
     app.innerHTML = `<header class="studio-head"><div><h1>Studio</h1><p class="lead">Your series, drafts and chapters.</p></div><button class="btn btn-primary" id="newNovel">New series</button></header>
       ${gifting.ready ? '<section class="card gift-earn" id="giftEarn" aria-labelledby="geTitle"><h2 id="geTitle">Gifts</h2><p class="muted small">Loading…</p></section>' : ''}
-      <ul class="st-rows">${list.map((n) => { const all = api.novels.all(n.id); const pub = all.filter((c) => c.status === 'published'); const live = api.novels.isPublic(n); const drafts = all.length - pub.length; return `<li>${thumb(n, { sm: true, badge: false })}<div><a class="t" href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a><div class="m"><span class="badge ${live ? 'badge-live' : 'badge-draft'}">${live ? (n.status === 'completed' ? 'COMPLETED' : 'LIVE') : 'DRAFT'}</span><span>${pub.length} published${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span><span>${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}</span>${gifting.ready ? `<span>${giftCountText(n.gift_count)}</span>` : ''}<span>${n.update_day !== null ? DAYS_LONG[n.update_day] + 's' : 'no release day'}</span></div></div><div class="a"><a class="btn btn-soft btn-sm" href="#/studio/novel/${n.id}">Manage</a>${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View</a>` : ''}</div></li>`; }).join('') || `<li style="display:block"><div class="empty"><h3>Start your first series</h3><p>Create a series, add chapters, publish when ready. Drafts stay private.</p><button class="btn" id="newNovel2">New series</button></div></li>`}</ul>`;
+      <ul class="st-rows">${list.map((n) => { const all = api.novels.all(n.id); const pub = all.filter((c) => c.status === 'published'); const live = api.novels.isPublic(n); const drafts = all.length - pub.length; return `<li>${thumb(n, { sm: true, badge: false })}<div><a class="t" href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a><div class="m"><span class="badge ${live ? 'badge-live' : 'badge-draft'}">${live ? (n.status === 'completed' ? 'COMPLETED' : 'LIVE') : 'DRAFT'}</span><span>${pub.length} published${drafts ? ` · ${drafts} draft${drafts > 1 ? 's' : ''}` : ''}</span><span>${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'follower')}</span>${gifting.ready ? `<span>${giftCountText(n.gift_count)}</span>` : ''}<span>${n.update_day !== null ? DAYS_LONG[n.update_day] + 's' : 'no release day'}</span></div></div><div class="a"><a class="btn btn-soft btn-sm" href="#/studio/novel/${n.id}">Manage</a>${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View</a>` : ''}</div></li>`; }).join('') || `<li style="display:block"><div class="empty"><h3>Start your first series</h3><p>Create a series, add chapters, publish when ready. Drafts stay private.</p><button class="btn" id="newNovel2">New series</button></div></li>`}</ul>`;
     if (gifting.ready) paintEarnings(me, $('#giftEarn'));
     const create = async () => { const n = await api.novels.create(me.id); go(`/studio/novel/${n.id}`); };
     $('#newNovel').addEventListener('click', create); $('#newNovel2')?.addEventListener('click', create);
@@ -949,9 +1049,9 @@
             <div class="field" style="flex:1"><label for="f_status">Status</label><select class="select" id="f_status"><option value="ongoing" ${n.status !== 'completed' ? 'selected' : ''}>Ongoing</option><option value="completed" ${n.status === 'completed' ? 'selected' : ''}>Completed</option></select></div></div>
           <div class="field"><span class="lbl">Cover</span><div class="thumb-picker"><div id="thumbPreview">${thumb(n, { badge: false })}</div><div><div class="swatches" id="swatches">${COVERS.map((c) => `<button type="button" style="background:${c}" data-c="${c}" aria-label="Cover colour ${c}" aria-pressed="${n.cover_color === c}"></button>`).join('')}</div><input class="input" id="f_cover" value="${esc(n.cover_image)}" placeholder="Image URL (optional)"><span class="hint">Square images, 600 × 600 or larger. Leave empty for a typographic cover.</span></div></div></div>
           <div class="row"><button class="btn" type="submit">Save details</button></div></form>
-        <div class="card"><h2>Danger zone</h2><p class="small muted">Deleting removes the series, every chapter, comments and subscriptions. No undo.</p><button class="btn btn-danger btn-sm" id="delNovel">Delete series</button></div>
+        <div class="card"><h2>Danger zone</h2><p class="small muted">Deleting removes the series, every chapter, comments and followers. No undo.</p><button class="btn btn-danger btn-sm" id="delNovel">Delete series</button></div>
       </div><div>
-        <div class="pub-state ${live ? 'live' : ''}">${live ? `<b>Live.</b> Readers can find it at <a href="#/novel/${esc(n.slug)}">/novel/${esc(n.slug)}</a>. ${pubCount} of ${plural(chs.length, 'chapter')} published · ${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'subscriber')}.` : n.status !== 'draft' ? '<b>Published, but hidden.</b> No published chapters yet, so readers cannot see it. Publish a chapter to go live.' : '<b>Draft.</b> Only you can see this series. Publishing any chapter makes it live and notifies subscribers.'}</div>
+        <div class="pub-state ${live ? 'live' : ''}">${live ? `<b>Live.</b> Readers can find it at <a href="#/novel/${esc(n.slug)}">/novel/${esc(n.slug)}</a>. ${pubCount} of ${plural(chs.length, 'chapter')} published · ${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'follower')}.` : n.status !== 'draft' ? '<b>Published, but hidden.</b> No published chapters yet, so readers cannot see it. Publish a chapter to go live.' : '<b>Draft.</b> Only you can see this series. Publishing any chapter makes it live and notifies followers.'}</div>
         <div class="row" style="margin-bottom:14px">${n.status !== 'draft' ? '<button class="btn btn-ghost btn-sm" id="offline">Take offline</button>' : pubCount ? '<button class="btn btn-primary btn-sm" id="pubNovel">Publish series</button>' : ''}${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View public page</a>` : ''}</div>
         <div class="card"><div class="row between" style="margin-bottom:8px"><h2 style="margin:0">Chapters</h2><button class="btn btn-sm" id="newCh">New chapter</button></div>
           <ol class="ep-rows">${chs.map((c, i) => `<li><span class="n">${c.chapter_number}</span><div><a class="t" href="#/studio/novel/${n.id}/ch/${c.id}">${esc(c.title || 'Untitled chapter')}</a><div class="m"><span class="badge ${c.status === 'published' ? 'badge-live' : 'badge-draft'}">${c.status === 'published' ? 'PUBLISHED' : 'DRAFT'}</span><span>${wordCount(c.content).toLocaleString()} words</span>${c.author_note ? '<span>note ✓</span>' : ''}<span>${esc(timeAgo(c.updated_at))}</span></div></div>
@@ -972,7 +1072,7 @@
     });
     $('#pubNovel')?.addEventListener('click', async () => { await api.novels.setStatus(n.id, 'ongoing'); toast('Series published', { href: `#/novel/${n.slug}`, label: 'View' }); render(); });
     $('#offline')?.addEventListener('click', async () => { if (!(await askConfirm('Readers will not see it. Nothing is deleted.', { title: 'Take the series offline?', ok: 'Take offline' }))) return; await api.novels.setStatus(n.id, 'draft'); toast('Series is offline'); render(); });
-    $('#delNovel').addEventListener('click', async () => { if (!(await askConfirm(`“${n.title || 'Untitled series'}” and all its chapters, comments and subscriptions will be deleted. This cannot be undone.`, { title: 'Delete this series?', ok: 'Delete series', danger: true }))) return; await api.novels.remove(n.id); toast('Series deleted'); go('/studio'); });
+    $('#delNovel').addEventListener('click', async () => { if (!(await askConfirm(`“${n.title || 'Untitled series'}” and all its chapters, comments and followers will be deleted. This cannot be undone.`, { title: 'Delete this series?', ok: 'Delete series', danger: true }))) return; await api.novels.remove(n.id); toast('Series deleted'); go('/studio'); });
     $('#newCh').addEventListener('click', async () => { const c = await api.chapters.create(n.id); go(`/studio/novel/${n.id}/ch/${c.id}`); });
     $$('[data-pub]').forEach((b) => b.addEventListener('click', () => publishChapter(b.dataset.pub)));
     $$('[data-unpub]').forEach((b) => b.addEventListener('click', async () => { await api.chapters.unpublish(b.dataset.unpub); toast('Chapter unpublished'); render(); }));
@@ -1042,19 +1142,32 @@
     if (!(await checkCanPublish())) return false;
     const { novel, novelWentLive, notified } = await api.chapters.publish(id);
     const i = api.novels.published(novel.id).findIndex((x) => x.id === id) + 1;
-    toast(novelWentLive ? 'Published. Your series is now live for everyone.' : `Chapter published${notified ? `. ${plural(notified, 'subscriber')} notified.` : ''}`, { href: `#/novel/${novel.slug}/ch/${i}`, label: 'Read it' });
+    toast(novelWentLive ? 'Published. Your series is now live for everyone.' : `Chapter published${notified ? `. ${plural(notified, 'follower')} notified.` : ''}`, { href: `#/novel/${novel.slug}/ch/${i}`, label: 'Read it' });
     render(); return true;
   }
 
   /* 6j. Chapter editor ------------------------------------------------------ */
+  /* Chapter editor autosave.
+     Every keystroke is backed up in this browser right away (survives a closed tab, a crash, or no internet).
+     Drafts also save to the server a moment after you stop typing, plus every 30 seconds while you keep going.
+     Published chapters only back up on this device: readers see changes when you press Update chapter. */
+  const draftBackup = {
+    key: (cid) => 'sfb.draft.' + cid,
+    get(cid) { try { return JSON.parse(localStorage.getItem(draftBackup.key(cid)) || 'null'); } catch { return null; } },
+    set(cid, v) { try { localStorage.setItem(draftBackup.key(cid), JSON.stringify({ ...v, at: now() })); return true; } catch { return false; } },
+    clear(cid) { try { localStorage.removeItem(draftBackup.key(cid)); } catch {} },
+  };
+
   route('/studio/novel/:id/ch/:cid', async ({ app, params }) => {
     if (!requireAuth()) return;
     const me = auth.current(); const n = api.novels.byId(params.id); const c = api.chapters.byId(params.cid);
     if (!n || !c || n.author_id !== me.id || c.novel_id !== n.id) return notFound(app, 'That chapter is not in your Studio.');
     setTitle(`${c.title || 'Untitled chapter'} · Editor`);
+    const isLive = c.status === 'published';
     app.innerHTML = `<div class="editor">
       <div class="ed-top"><div class="crumbs" style="margin:0"><a href="#/studio">Studio</a> / <a href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a> / Chapter ${c.chapter_number}</div>
-        <div class="row"><span class="state" id="state"><span class="badge ${c.status === 'published' ? 'badge-live' : 'badge-draft'}">${c.status === 'published' ? 'PUBLISHED' : 'DRAFT'}</span></span><button class="btn btn-ghost btn-sm" id="saveBtn">Save draft</button>${c.status === 'published' ? '<button class="btn btn-primary btn-sm" id="pubBtn">Update chapter</button><button class="btn btn-ghost btn-sm" id="unpubBtn">Unpublish</button>' : '<button class="btn btn-primary btn-sm" id="pubBtn">Publish chapter</button>'}</div></div>
+        <div class="row"><span class="badge ${isLive ? 'badge-live' : 'badge-draft'}">${isLive ? 'PUBLISHED' : 'DRAFT'}</span><span class="save-state" id="state" aria-live="polite"></span>${isLive ? '' : '<button class="btn btn-ghost btn-sm" id="saveBtn">Save draft</button>'}${isLive ? '<button class="btn btn-primary btn-sm" id="pubBtn">Update chapter</button><button class="btn btn-ghost btn-sm" id="unpubBtn">Unpublish</button>' : '<button class="btn btn-primary btn-sm" id="pubBtn">Publish chapter</button>'}</div></div>
+      <div id="restoreBar"></div>
       <input class="ed-title" id="title" value="${esc(c.title)}" placeholder="Chapter title" maxlength="140" aria-label="Chapter title">
       <div class="toolbar" role="toolbar" aria-label="Formatting">
         <button type="button" data-cmd="bold" title="Bold"><b>B</b></button><button type="button" data-cmd="italic" title="Italic"><i>I</i></button><button type="button" data-cmd="underline" title="Underline"><u>U</u></button><span class="gap"></span>
@@ -1066,21 +1179,79 @@
 
     const body = $('#body'), title = $('#title'), note = $('#note'), state = $('#state');
     const words = () => { $('#words').textContent = `${wordCount(body.innerHTML).toLocaleString()} words · ${readMin(wordCount(body.innerHTML))} min`; $('#noteCount').textContent = `${note.value.length} / 1000`; };
+    const snapshot = () => ({ title: title.value.trim(), content: body.innerHTML, author_note: note.value.trim() });
+    const same = (x) => x && x.title === (c.title || '') && x.content === (c.content || '') && x.author_note === (c.author_note || '');
     words();
-    let dirty = false, timer = null;
-    const badge = () => `<span class="badge ${c.status === 'published' ? 'badge-live' : 'badge-draft'}">${c.status === 'published' ? 'PUBLISHED' : 'DRAFT'}</span>`;
-    const markDirty = () => { dirty = true; state.innerHTML = badge() + ' Unsaved changes'; clearTimeout(timer); timer = setTimeout(() => saveDraft(false), 1500); };
-    async function saveDraft(announce) { clearTimeout(timer); await api.chapters.update(c.id, { title: title.value.trim(), content: body.innerHTML, author_note: note.value.trim() }); dirty = false; state.innerHTML = badge() + ' Saved just now'; if (announce) toast('Draft saved'); }
+
+    // Status pill: Saving… / Saved 2 min ago / Saved on this device / Offline
+    let dirty = false, timer = null, maxTimer = null, savedAt = null, saving = false, failed = false;
+    const paintState = () => {
+      if (saving) { state.className = 'save-state saving'; state.textContent = 'Saving…'; return; }
+      if (failed) { state.className = 'save-state warn'; state.textContent = 'Couldn’t reach the server. Saved on this device, retrying…'; return; }
+      if (dirty && isLive) { state.className = 'save-state local'; state.textContent = 'Saved on this device. Press Update chapter to go live.'; return; }
+      if (dirty) { state.className = 'save-state'; state.textContent = 'Editing…'; return; }
+      state.className = 'save-state ok'; state.textContent = savedAt ? `Saved ${timeAgo(savedAt).replace(/^now$/, 'just now')}` : 'All changes saved';
+    };
+    const tick = setInterval(paintState, 15000);
+    paintState();
+
+    async function saveServer(announce) {
+      clearTimeout(timer); clearTimeout(maxTimer); maxTimer = null;
+      if (saving) return;
+      saving = true; paintState();
+      try {
+        const snap = snapshot();
+        await api.chapters.update(c.id, snap);
+        draftBackup.clear(c.id);
+        dirty = false; failed = false; savedAt = now();
+        if (announce) toast(isLive ? 'Changes saved' : 'Draft saved');
+      } catch (err) {
+        failed = true; timer = setTimeout(() => saveServer(false), 8000); // try again shortly
+        if (announce) toast('Couldn’t save to the server. Your work is safe on this device.');
+      } finally { saving = false; paintState(); }
+    }
+    const markDirty = () => {
+      dirty = true;
+      draftBackup.set(c.id, snapshot()); // instant local backup
+      if (!isLive) {
+        clearTimeout(timer); timer = setTimeout(() => saveServer(false), 1500);
+        if (!maxTimer) maxTimer = setTimeout(() => saveServer(false), 30000); // long typing streaks still save
+      }
+      paintState();
+    };
+
+    // Found unsaved work from last time (closed tab, crash, lost connection)? Offer it back.
+    const backup = draftBackup.get(c.id);
+    if (backup && !same(backup) && backup.at > (c.updated_at || 0) - 1000) {
+      $('#restoreBar').innerHTML = `<div class="restore-bar" role="status"><span><b>Unsaved changes found</b> from ${esc(timeAgo(backup.at))}. Want them back?</span><button class="btn btn-primary btn-sm" id="rsYes">Restore</button><button class="btn btn-ghost btn-sm" id="rsNo">Discard</button></div>`;
+      $('#rsYes').addEventListener('click', () => { title.value = backup.title || ''; body.innerHTML = sanitize(backup.content || ''); note.value = backup.author_note || ''; $('#restoreBar').innerHTML = ''; words(); markDirty(); toast('Changes restored'); });
+      $('#rsNo').addEventListener('click', async () => { if (!(await askConfirm('The unsaved changes on this device will be deleted.', { title: 'Discard changes?', ok: 'Discard', danger: true }))) return; draftBackup.clear(c.id); $('#restoreBar').innerHTML = ''; });
+    } else if (backup && same(backup)) draftBackup.clear(c.id);
+
     body.addEventListener('input', () => { words(); markDirty(); }); title.addEventListener('input', () => { setTitle(`${title.value.trim() || 'Untitled chapter'} · Editor`); markDirty(); }); note.addEventListener('input', () => { words(); markDirty(); });
     body.addEventListener('paste', (e) => { e.preventDefault(); const t = (e.clipboardData || window.clipboardData).getData('text/plain'); document.execCommand('insertHTML', false, t.split(/\n{2,}/).map((p) => `<p>${esc(p.trim()).replace(/\n/g, '<br>')}</p>`).join('')); });
+    function onKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (isLive) { draftBackup.set(c.id, snapshot()); toast('Saved on this device. Press Update chapter to make it live.'); } else saveServer(true);
+      }
+    }
     document.addEventListener('keydown', onKey);
-    function onKey(e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDraft(true); } }
+    // Save when the tab is hidden (switching apps on a phone, closing the laptop).
+    const onHide = () => { if (document.visibilityState === 'hidden' && dirty && !isLive) saveServer(false); };
+    document.addEventListener('visibilitychange', onHide);
+    const onOnline = () => { if (failed) saveServer(false); };
+    window.addEventListener('online', onOnline);
     $$('.toolbar button').forEach((b) => b.addEventListener('mousedown', (e) => { e.preventDefault(); body.focus(); if (b.dataset.cmd) document.execCommand(b.dataset.cmd, false, null); if (b.dataset.block) document.execCommand('formatBlock', false, b.dataset.block); words(); markDirty(); }));
-    $('#saveBtn').addEventListener('click', () => saveDraft(true));
-    $('#pubBtn').addEventListener('click', async () => { await saveDraft(false); if (await publishChapter(c.id)) go(`/studio/novel/${n.id}`); });
-    $('#unpubBtn')?.addEventListener('click', async () => { await saveDraft(false); await api.chapters.unpublish(c.id); toast('Chapter unpublished'); render(); });
-    window.onbeforeunload = () => (dirty ? 'Unsaved changes.' : undefined);
-    cleanup = () => { window.onbeforeunload = null; document.removeEventListener('keydown', onKey); if (dirty) saveDraft(false); };
+    $('#saveBtn')?.addEventListener('click', () => saveServer(true));
+    $('#pubBtn').addEventListener('click', async () => { await saveServer(false); if (failed) return; if (isLive) { toast('Chapter updated'); go(`/studio/novel/${n.id}`); return; } if (await publishChapter(c.id)) go(`/studio/novel/${n.id}`); });
+    $('#unpubBtn')?.addEventListener('click', async () => { await saveServer(false); if (failed) return; await api.chapters.unpublish(c.id); toast('Chapter unpublished'); render(); });
+    window.onbeforeunload = () => (dirty && (isLive || failed) ? 'Unsaved changes.' : undefined);
+    cleanup = () => {
+      window.onbeforeunload = null; clearInterval(tick); clearTimeout(timer); clearTimeout(maxTimer);
+      document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('online', onOnline);
+      if (dirty && !isLive) saveServer(false);
+    };
   });
 
   /* 6k. Settings ------------------------------------------------------------ */
