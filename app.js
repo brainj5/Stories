@@ -771,6 +771,7 @@
       <div class="rd-top" id="rdTop"><div class="rd-top-in">
         <a class="back" href="#/novel/${esc(n.slug)}" aria-label="Back to series">${svgBack}</a>
         <div class="meta"><div class="s">${esc(n.title)}</div><div class="e"><span id="rdNow"></span><span class="rd-left" id="rdLeft"></span></div></div>
+        <button class="tool" id="rdWhoBtn" aria-label="Who’s who: characters and places so far" title="Who’s who" hidden>${ICON_PEOPLE}</button>
         <button class="tool" id="rdSettingsBtn" aria-expanded="false" aria-controls="rdSettings" aria-label="Reading settings">${svgType}</button>
         <a class="tool" href="#/novel/${esc(n.slug)}" aria-label="Chapter list">${svgList}</a>
       </div></div>
@@ -883,6 +884,16 @@
         toast(`Picked up where you left off (${spot.p}%)`);
       }, 60));
     }
+
+    // Who's who: only shows up if the writer has made bible entries visible to readers.
+    const whoBtn = $('#rdWhoBtn');
+    bible.forReader(n.id, chs.length).then((all) => { if (all && (all.entries.length || all.locked)) whoBtn.hidden = false; });
+    whoBtn.addEventListener('click', async () => {
+      const upto = current + 1;
+      const data = await bible.forReader(n.id, upto);
+      if (!data) { toast('Couldn’t load the guide. Try again in a moment.'); return; }
+      openWhosWho({ n, upto, data, mount: reader });
+    });
 
     // Hide chrome on scroll down, reveal on scroll up; progress bar.
     let lastY = window.scrollY;
@@ -1053,6 +1064,7 @@
       </div><div>
         <div class="pub-state ${live ? 'live' : ''}">${live ? `<b>Live.</b> Readers can find it at <a href="#/novel/${esc(n.slug)}">/novel/${esc(n.slug)}</a>. ${pubCount} of ${plural(chs.length, 'chapter')} published · ${compact(api.novels.subscribers(n))} ${pl(api.novels.subscribers(n), 'follower')}.` : n.status !== 'draft' ? '<b>Published, but hidden.</b> No published chapters yet, so readers cannot see it. Publish a chapter to go live.' : '<b>Draft.</b> Only you can see this series. Publishing any chapter makes it live and notifies followers.'}</div>
         <div class="row" style="margin-bottom:14px">${n.status !== 'draft' ? '<button class="btn btn-ghost btn-sm" id="offline">Take offline</button>' : pubCount ? '<button class="btn btn-primary btn-sm" id="pubNovel">Publish series</button>' : ''}${live ? `<a class="btn btn-ghost btn-sm" href="#/novel/${esc(n.slug)}">View public page</a>` : ''}</div>
+        <a class="card bible-card" href="#/studio/novel/${n.id}/bible"><span class="bible-card-ico">${ICON_BOOK}</span><span><b>Story bible</b><span>Characters, places, rules and open threads. Private to you.</span></span><span class="bible-card-go" aria-hidden="true">›</span></a>
         <div class="card"><div class="row between" style="margin-bottom:8px"><h2 style="margin:0">Chapters</h2><button class="btn btn-sm" id="newCh">New chapter</button></div>
           <ol class="ep-rows">${chs.map((c, i) => `<li><span class="n">${c.chapter_number}</span><div><a class="t" href="#/studio/novel/${n.id}/ch/${c.id}">${esc(c.title || 'Untitled chapter')}</a><div class="m"><span class="badge ${c.status === 'published' ? 'badge-live' : 'badge-draft'}">${c.status === 'published' ? 'PUBLISHED' : 'DRAFT'}</span><span>${wordCount(c.content).toLocaleString()} words</span>${c.author_note ? '<span>note ✓</span>' : ''}<span>${esc(timeAgo(c.updated_at))}</span></div></div>
             <div class="a"><button class="btn btn-soft btn-sm" data-move="-1" data-id="${c.id}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="btn btn-soft btn-sm" data-move="1" data-id="${c.id}" ${i === chs.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>${c.status === 'published' ? `<button class="btn btn-ghost btn-sm" data-unpub="${c.id}">Unpublish</button>` : `<button class="btn btn-primary btn-sm" data-pub="${c.id}">Publish</button>`}<button class="btn btn-ghost btn-sm" data-del="${c.id}">Delete</button></div></li>`).join('') || '<li style="display:block"><div class="empty"><h3>No chapters yet</h3><p>Add the first one and start writing.</p></div></li>'}</ol></div>
@@ -1147,6 +1159,284 @@
   }
 
   /* 6j. Chapter editor ------------------------------------------------------ */
+  /* Story bible -------------------------------------------------------------- */
+  /* A private notebook for each series: characters, places, timeline, rules, items and open threads.
+     Only the writer can read it (Supabase RLS). Readers only see entries the writer marks visible,
+     through the reader_bible() function, and only up to the chapter they have reached.
+     Needs story-bible.sql to be run once in Supabase. */
+  const BIBLE_KINDS = [
+    { k: 'character', label: 'Characters', one: 'character', roleLabel: 'Role in the story', rolePh: 'Lead, guide, rival…' },
+    { k: 'place', label: 'Places', one: 'place', roleLabel: 'What kind of place', rolePh: 'Roadside inn, capital city…' },
+    { k: 'timeline', label: 'Timeline', one: 'event', roleLabel: 'When it happens', rolePh: 'Ten years before Ch. 1…' },
+    { k: 'rule', label: 'Rules & lore', one: 'rule', roleLabel: 'The rule in one line', rolePh: 'Magic always costs a memory…' },
+    { k: 'item', label: 'Items', one: 'item', roleLabel: 'What it is', rolePh: 'A letter that won’t open…' },
+    { k: 'thread', label: 'Open threads', one: 'thread', roleLabel: 'The question readers are waiting on', rolePh: 'Who is behind the locked door?' },
+  ];
+  const BIBLE_KIND = Object.fromEntries(BIBLE_KINDS.map((x) => [x.k, x]));
+  const BIBLE_COLORS = ['#c8102e', '#0f766e', '#7c3aed', '#c2410c', '#0369a1', '#17181c', '#4d7c0f', '#9d174d'];
+  const ICON_PEOPLE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 20a6.5 6.5 0 0 0-3-5.5"/></svg>';
+  const ICON_BOOK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2h14"/></svg>';
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const plainText = (html) => new DOMParser().parseFromString(String(html || ''), 'text/html').body.textContent || '';
+
+  const bible = {
+    cache: {},
+    async load(novelId, force = false) {
+      if (!force && bible.cache[novelId]) return bible.cache[novelId];
+      const { data, error } = await sb.from('bible_entries').select('*').eq('novel_id', novelId).order('name');
+      if (error) throw new Error(/bible_entries|does not exist|schema cache/i.test(error.message) ? 'The story bible isn’t set up yet. Run story-bible.sql in the Supabase SQL Editor first.' : error.message);
+      bible.cache[novelId] = (data || []).map((e) => ({ ...e, aliases: e.aliases || [], details: e.details || {} }));
+      return bible.cache[novelId];
+    },
+    blank(novelId, kind) {
+      const used = new Set((bible.cache[novelId] || []).map((e) => e.color));
+      return { id: 'b_' + uid(), novel_id: novelId, kind, name: `New ${BIBLE_KIND[kind].one}`, aliases: [], role: '', details: {}, notes: '', first_chapter: null, reader_visible: false, reader_summary: '', visible_from: 1, color: BIBLE_COLORS.find((c) => !used.has(c)) || BIBLE_COLORS[0], created_at: now(), updated_at: now() };
+    },
+    async save(e) {
+      const row = { ...e, updated_at: now() };
+      await must(sb.from('bible_entries').upsert(row));
+      const list = (bible.cache[e.novel_id] ||= []); const i = list.findIndex((x) => x.id === e.id);
+      if (i >= 0) list[i] = row; else list.push(row);
+      Object.assign(e, row); return row;
+    },
+    async remove(e) {
+      await must(sb.from('bible_entries').delete().eq('id', e.id));
+      const list = bible.cache[e.novel_id] || []; const i = list.findIndex((x) => x.id === e.id); if (i >= 0) list.splice(i, 1);
+    },
+    async forReader(novelId, upto) {
+      const { data, error } = await sb.rpc('reader_bible', { p_novel: novelId, p_upto: upto });
+      return error ? null : data;
+    },
+    names: (e) => [e.name, ...(e.aliases || [])].map((s) => String(s || '').trim()).filter((s) => s.length > 1),
+    /** Does this text mention the entry by name or alias (whole word, any case)? */
+    mentioned(e, text) { return bible.names(e).some((n) => new RegExp(`(^|[^\\p{L}\\p{N}])${escRe(n)}(?=$|[^\\p{L}\\p{N}])`, 'iu').test(text)); },
+    /** Chapter numbers (all chapters, drafts too) that mention the entry. */
+    appearsIn(e, chapters) { return chapters.filter((c) => bible.mentioned(e, plainText(c.title + '\n' + c.content))).map((c) => c.chapter_number); },
+    /** Open threads not mentioned in the last 3+ chapters. */
+    quiet(entries, chapters) {
+      const latest = chapters.reduce((m, c) => Math.max(m, c.chapter_number), 0);
+      return entries.filter((e) => e.kind === 'thread' && !e.details.resolved).map((e) => {
+        const seen = bible.appearsIn(e, chapters); const last = Math.max(e.first_chapter || 0, ...seen, 0);
+        return { e, last, gap: last ? latest - last : 0 };
+      }).filter((x) => x.last && x.gap >= 3);
+    },
+    facts(e) {
+      const d = e.details || {};
+      if (e.kind === 'character') return [d.appearance, d.voice].filter(Boolean).join(' · ');
+      return d.facts || '';
+    },
+  };
+  const bibleAvatar = (e, size = '') => `<span class="b-av ${size}" style="background:${esc(e.color || '#17181c')}" aria-hidden="true">${e.kind === 'character' ? esc(initials(e.name)) : esc(BIBLE_KIND[e.kind].one.slice(0, 2).toUpperCase())}</span>`;
+
+  route('/studio/novel/:id/bible', async ({ app, params, query }) => {
+    if (!requireAuth()) return;
+    const me = auth.current(); const n = api.novels.byId(params.id);
+    if (!n || n.author_id !== me.id) return notFound(app, 'That series is not in your Studio.');
+    setTitle(`Story bible · ${n.title || 'Untitled series'}`);
+    app.innerHTML = `<div class="bible"><p class="muted" style="padding:40px 0">Opening the story bible…</p></div>`;
+    let entries;
+    try { entries = await bible.load(n.id, true); } catch (err) {
+      app.innerHTML = `<div class="bible"><div class="crumbs"><a href="#/studio">Studio</a> / <a href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a> / Story bible</div><div class="card"><h2>Story bible</h2><p>${esc(err.message)}</p></div></div>`;
+      return;
+    }
+    const chapters = api.novels.all(n.id);
+    const st = { kind: BIBLE_KIND[query.kind] ? query.kind : 'character', sel: query.e || null, q: '' };
+    if (st.sel) { const e = entries.find((x) => x.id === st.sel); if (e) st.kind = e.kind; else st.sel = null; }
+    if (!st.sel) st.sel = (entries.find((x) => x.kind === st.kind) || {}).id || null;
+
+    app.innerHTML = `<div class="bible">
+      <div class="crumbs"><a href="#/studio">Studio</a> / <a href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a> / Story bible</div>
+      <header class="bible-head"><div><h1>Story bible</h1><p class="lead">Private notes on your characters, places and rules. Only you can see this. Mark an entry for readers to add it to their spoiler-safe “Who’s who” guide.</p></div>
+        <button class="btn btn-primary" id="bNew"></button></header>
+      <div class="bible-cols">
+        <nav class="bible-nav" id="bNav" aria-label="Bible sections"></nav>
+        <section class="bible-list" aria-label="Entries"><label class="sr-only" for="bSearch">Search the bible</label><input class="input" id="bSearch" type="search" placeholder="Search names, aliases, notes"><div id="bQuiet"></div><div class="bible-grid" id="bGrid"></div></section>
+        <section class="bible-edit card" id="bEdit" aria-label="Entry"></section>
+      </div></div>`;
+
+    const visible = () => {
+      const q = st.q.trim().toLowerCase();
+      return entries.filter((e) => (q ? [e.name, e.role, e.notes, ...(e.aliases || []), ...Object.values(e.details || {}).map(String)].join(' ').toLowerCase().includes(q) : e.kind === st.kind))
+        .sort((a, b) => (a.first_chapter || 999) - (b.first_chapter || 999) || a.name.localeCompare(b.name));
+    };
+    const quiet = () => bible.quiet(entries, chapters);
+
+    function paintNav() {
+      const quietIds = new Set(quiet().map((x) => x.e.id));
+      $('#bNav').innerHTML = BIBLE_KINDS.map((x) => { const count = entries.filter((e) => e.kind === x.k).length; const warn = x.k === 'thread' && quietIds.size; return `<button type="button" data-kind="${x.k}" aria-pressed="${!st.q && st.kind === x.k}"><span>${x.label}</span><span class="c">${warn ? `<span class="b-dot" title="${quietIds.size} quiet"></span>` : ''}${count}</span></button>`; }).join('')
+        + '<p class="bible-tip"><b>Open threads</b> are promises you made the reader, like a locked door or a stranger’s name. The bible tells you when one has gone quiet for 3 chapters.</p>';
+      $('#bNew').textContent = `+ New ${BIBLE_KIND[st.kind].one}`;
+    }
+    function paintList() {
+      const list = visible(); const quietMap = new Map(quiet().map((x) => [x.e.id, x.gap]));
+      $('#bQuiet').innerHTML = !st.q && st.kind === 'thread' && quietMap.size ? `<div class="bible-warn" role="status">${quietMap.size === 1 ? '1 thread has' : quietMap.size + ' threads have'} gone quiet. Readers may have forgotten, or think you did.</div>` : '';
+      $('#bGrid').innerHTML = list.map((e) => `<button type="button" class="b-card" data-sel="${e.id}" aria-pressed="${e.id === st.sel}">
+          ${bibleAvatar(e)}<span class="b-card-t"><b>${esc(e.name)}</b><span>${esc(e.role || BIBLE_KIND[e.kind].label)}${e.first_chapter ? ` · Ch. ${e.first_chapter}` : ''}</span>
+          ${quietMap.has(e.id) ? `<span class="b-flag">Quiet for ${quietMap.get(e.id)} chapters</span>` : ''}${e.kind === 'thread' && e.details.resolved ? '<span class="b-ok">Resolved</span>' : ''}${e.reader_visible ? `<span class="b-eye">Readers see from Ch. ${e.visible_from}</span>` : ''}</span></button>`).join('')
+        || `<div class="b-empty">${st.q ? 'Nothing matches that search.' : `No ${BIBLE_KIND[st.kind].label.toLowerCase()} yet. Add your first with the button above.`}</div>`;
+    }
+
+    let saveTimer = null; let pending = null;
+    async function flush() {
+      clearTimeout(saveTimer); if (!pending) return;
+      const e = pending; pending = null; const s = $('#bState');
+      if (s) s.textContent = 'Saving…';
+      try { await bible.save(e); if (s && !pending) s.textContent = '✓ Saved'; } catch (err) { pending = e; if (s) s.textContent = 'Couldn’t save. Retrying…'; saveTimer = setTimeout(flush, 5000); }
+    }
+    const queueSave = (e) => { pending = e; const s = $('#bState'); if (s) s.textContent = 'Editing…'; clearTimeout(saveTimer); saveTimer = setTimeout(flush, 900); };
+
+    function paintEdit() {
+      const e = entries.find((x) => x.id === st.sel); const box = $('#bEdit');
+      if (!e) { box.innerHTML = `<div class="b-empty">${ICON_BOOK}<p>Pick an entry to see it here, or start a new one.</p></div>`; return; }
+      const K = BIBLE_KIND[e.kind]; const d = e.details;
+      const seen = bible.appearsIn(e, chapters);
+      const chOpts = (val, none) => `${none ? `<option value="">${none}</option>` : ''}${chapters.map((c) => `<option value="${c.chapter_number}" ${+val === c.chapter_number ? 'selected' : ''}>Ch. ${c.chapter_number}${c.title ? ' · ' + esc(c.title.slice(0, 40)) : ''}</option>`).join('')}`;
+      const area = (id, label, val, ph, rows = 2) => `<div class="field"><label for="${id}">${label}</label><textarea class="textarea" id="${id}" rows="${rows}" maxlength="600" placeholder="${esc(ph)}">${esc(val || '')}</textarea></div>`;
+      box.innerHTML = `<form id="bForm" autocomplete="off">
+        <div class="b-edit-head">${bibleAvatar(e, 'lg')}<div style="flex:1;min-width:0"><label class="sr-only" for="bName">Name</label><input class="b-name" id="bName" value="${esc(e.name)}" maxlength="80" required><div class="muted small">${esc(K.label.replace(/s$/, ''))}<span class="b-state" id="bState" aria-live="polite"></span></div></div></div>
+        <div class="field"><label for="bAlias">Also called <span class="muted">(comma separated)</span></label><input class="input" id="bAlias" value="${esc((e.aliases || []).join(', '))}" placeholder="Nicknames, titles, what others call it"><span class="hint">Used to spot it in your chapters.</span></div>
+        <div class="field"><label for="bRole">${K.roleLabel}</label><input class="input" id="bRole" value="${esc(e.role)}" maxlength="120" placeholder="${esc(K.rolePh)}"></div>
+        ${e.kind === 'character'
+          ? area('bLook', 'Appearance', d.appearance, 'Eye colour, scars, what they always wear') + area('bWants', 'What they want', d.wants, 'The thing they’d cross the world for') + area('bVoice', 'Voice', d.voice, 'How they talk. Short sentences? Never swears?') + area('bKnows', 'What they know (and don’t)', d.knows, 'Secrets, and what they haven’t found out yet')
+          : area('bFacts', 'Key facts', d.facts, 'The details you must keep consistent', 4)}
+        ${e.kind === 'thread' ? `<label class="b-check"><input type="checkbox" id="bResolved" ${d.resolved ? 'checked' : ''}> Resolved in the story</label>` : ''}
+        <div class="row" style="gap:14px;align-items:start">
+          <div class="field" style="flex:1"><label for="bFirst">First appears</label><select class="select" id="bFirst">${chOpts(e.first_chapter, 'Not yet')}</select></div>
+          <div class="field" style="flex:1"><span class="lbl">Colour</span><div class="b-swatches" id="bColors">${BIBLE_COLORS.map((c) => `<button type="button" data-c="${c}" style="background:${c}" aria-label="Colour ${c}" aria-pressed="${e.color === c}"></button>`).join('')}</div></div>
+        </div>
+        <div class="b-seen"><span class="lbl">Mentioned in</span>${seen.length ? seen.map((num) => { const c = chapters.find((x) => x.chapter_number === num); return `<a class="chip" href="#/studio/novel/${n.id}/ch/${c.id}">Ch. ${num}</a>`; }).join('') : '<span class="muted small">No chapters yet</span>'}</div>
+        ${area('bNotes', 'Private notes', e.notes, 'Plans, twists, things to remember. Never shown to readers.', 4).replace('maxlength="600"', 'maxlength="4000"')}
+        <fieldset class="b-reader"><legend>Readers’ “Who’s who” guide</legend>
+          <label class="b-check"><input type="checkbox" id="bVis" ${e.reader_visible ? 'checked' : ''}> Show this entry to readers</label>
+          <div id="bVisFields" ${e.reader_visible ? '' : 'hidden'}>
+            <div class="field"><label for="bSum">What readers see</label><textarea class="textarea" id="bSum" rows="2" maxlength="300" placeholder="Write it so it spoils nothing up to that chapter.">${esc(e.reader_summary)}</textarea></div>
+            <div class="field"><label for="bFrom">Show from</label><select class="select" id="bFrom">${chapters.length ? chOpts(e.visible_from) : '<option value="1">Ch. 1</option>'}</select><span class="hint">Readers only see it once they reach this chapter. Your private notes are never shown.</span></div>
+          </div></fieldset>
+        <div class="row between"><button type="button" class="btn btn-ghost btn-sm" id="bDel">Delete</button><button type="button" class="btn btn-sm" id="bDone">Done</button></div>
+      </form>`;
+
+      const f = $('#bForm');
+      const read = () => {
+        const name = $('#bName').value.trim();
+        e.name = name || e.name; e.role = $('#bRole').value.trim();
+        e.aliases = $('#bAlias').value.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 12);
+        e.details = e.kind === 'character'
+          ? { appearance: $('#bLook').value.trim(), wants: $('#bWants').value.trim(), voice: $('#bVoice').value.trim(), knows: $('#bKnows').value.trim() }
+          : { facts: $('#bFacts').value.trim(), ...(e.kind === 'thread' ? { resolved: $('#bResolved').checked } : {}) };
+        e.first_chapter = $('#bFirst').value ? +$('#bFirst').value : null;
+        e.notes = $('#bNotes').value.trim();
+        e.reader_visible = $('#bVis').checked; e.reader_summary = $('#bSum').value.trim(); e.visible_from = +$('#bFrom').value || 1;
+        if (e.reader_visible && e.first_chapter && e.visible_from < e.first_chapter && !f.dataset.fromTouched) { e.visible_from = e.first_chapter; $('#bFrom').value = String(e.first_chapter); }
+      };
+      const changed = () => { read(); queueSave(e); paintList(); paintNav(); box.querySelector('.b-av').outerHTML = bibleAvatar(e, 'lg'); };
+      f.addEventListener('input', changed); f.addEventListener('change', changed);
+      $('#bFrom').addEventListener('change', () => { f.dataset.fromTouched = '1'; });
+      $('#bVis').addEventListener('change', () => { $('#bVisFields').hidden = !$('#bVis').checked; });
+      $('#bColors').addEventListener('click', (ev) => { const b = ev.target.closest('[data-c]'); if (!b) return; e.color = b.dataset.c; $$('button', $('#bColors')).forEach((x) => x.setAttribute('aria-pressed', x === b)); changed(); });
+      $('#bDone').addEventListener('click', async () => { await flush(); toast('Saved'); });
+      $('#bDel').addEventListener('click', async () => {
+        if (!(await askConfirm(`“${e.name}” will be removed from your story bible.`, { title: 'Delete this entry?', ok: 'Delete', danger: true }))) return;
+        clearTimeout(saveTimer); pending = null;
+        try { await bible.remove(e); } catch (err) { toast(err.message); return; }
+        entries = bible.cache[n.id]; st.sel = (entries.find((x) => x.kind === st.kind) || {}).id || null;
+        paintNav(); paintList(); paintEdit(); toast('Entry deleted');
+      });
+    }
+
+    const select = async (id) => { await flush(); st.sel = id; history.replaceState(null, '', `#/studio/novel/${n.id}/bible?e=${id}`); paintList(); paintEdit(); };
+    $('#bNav').addEventListener('click', async (ev) => {
+      const b = ev.target.closest('[data-kind]'); if (!b) return;
+      await flush(); st.kind = b.dataset.kind; st.q = ''; $('#bSearch').value = '';
+      st.sel = (entries.find((x) => x.kind === st.kind) || {}).id || null;
+      history.replaceState(null, '', `#/studio/novel/${n.id}/bible?kind=${st.kind}`);
+      paintNav(); paintList(); paintEdit();
+    });
+    $('#bGrid').addEventListener('click', (ev) => { const b = ev.target.closest('[data-sel]'); if (b) select(b.dataset.sel); });
+    $('#bSearch').addEventListener('input', (ev) => { st.q = ev.target.value; paintNav(); paintList(); });
+    $('#bNew').addEventListener('click', async () => {
+      await flush();
+      const e = bible.blank(n.id, st.kind);
+      try { await bible.save(e); } catch (err) { toast(err.message); return; }
+      entries = bible.cache[n.id]; st.q = ''; $('#bSearch').value = '';
+      await select(e.id); paintNav();
+      const name = $('#bName'); name.focus(); name.select();
+    });
+    if (query.new && BIBLE_KIND[query.new]) { st.kind = query.new; paintNav(); $('#bNew').click(); }
+
+    paintNav(); paintList(); paintEdit();
+    const onKey = (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); flush().then(() => toast('Saved')); } };
+    document.addEventListener('keydown', onKey);
+    window.onbeforeunload = () => (pending ? 'Unsaved changes.' : undefined);
+    cleanup = () => { document.removeEventListener('keydown', onKey); window.onbeforeunload = null; flush(); };
+  });
+
+  /* Bible drawer for the chapter editor: shows who and what this chapter mentions. */
+  function mountBibleDrawer({ n, c, body, titleEl, btn }) {
+    const host = document.createElement('aside');
+    host.className = 'bible-drawer'; host.id = 'bibleDrawer'; host.setAttribute('aria-label', 'Story bible'); host.hidden = true;
+    document.body.appendChild(host);
+    let entries = null; let error = null; let open = false; let q = ''; const expanded = new Set();
+    const chapters = () => api.novels.all(n.id).map((x) => (x.id === c.id ? { ...x, title: titleEl.value, content: body.innerHTML } : x));
+
+    const item = (e) => {
+      const d = e.details || {}; const more = expanded.has(e.id);
+      const facts = bible.facts(e);
+      return `<li class="bd-item ${more ? 'open' : ''}"><button type="button" data-x="${e.id}" aria-expanded="${more}">${bibleAvatar(e, 'sm')}<span class="bd-t"><b>${esc(e.name)}</b><span>${esc(e.role || BIBLE_KIND[e.kind].label)}</span></span></button>
+        ${facts && !more ? `<p class="bd-facts">${esc(facts)}</p>` : ''}
+        ${more ? `<dl class="bd-more">${e.kind === 'character' ? [['Appearance', d.appearance], ['Wants', d.wants], ['Voice', d.voice], ['Knows', d.knows]].filter((r) => r[1]).map((r) => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('') : d.facts ? `<dt>Key facts</dt><dd>${esc(d.facts)}</dd>` : ''}${e.notes ? `<dt>Private notes</dt><dd>${esc(e.notes)}</dd>` : ''}${e.aliases?.length ? `<dt>Also called</dt><dd>${esc(e.aliases.join(', '))}</dd>` : ''}</dl><a class="bd-link" href="#/studio/novel/${n.id}/bible?e=${e.id}">Edit entry</a>` : ''}</li>`;
+    };
+    function paint() {
+      if (!entries) { host.innerHTML = `<div class="bd-head"><h2>Story bible</h2><button type="button" class="bd-x" data-close aria-label="Close story bible">×</button></div><p class="bd-hint">${error ? esc(error) : 'Loading…'}</p>`; return; }
+      const text = plainText(titleEl.value + '\n' + body.innerHTML);
+      const inCh = entries.filter((e) => bible.mentioned(e, text));
+      const ql = q.trim().toLowerCase();
+      const found = ql ? entries.filter((e) => [e.name, ...(e.aliases || [])].join(' ').toLowerCase().includes(ql)) : [];
+      const quiet = bible.quiet(entries, chapters());
+      btn.innerHTML = `${ICON_BOOK}Bible${inCh.length ? ` · ${inCh.length}` : ''}`;
+      host.innerHTML = `<div class="bd-head"><h2>In this chapter</h2><button type="button" class="bd-x" data-close aria-label="Close story bible">×</button></div>
+        <p class="bd-hint">Found by name and alias as you type.</p>
+        <ul class="bd-list">${inCh.map(item).join('') || `<li class="bd-none">${entries.length ? 'No bible entries mentioned yet.' : 'Your bible is empty.'}</li>`}</ul>
+        <label class="sr-only" for="bdSearch">Look up an entry</label><input class="input bd-search" id="bdSearch" type="search" placeholder="Look up anyone or anything" value="${esc(q)}">
+        ${ql ? `<ul class="bd-list">${found.map(item).join('') || '<li class="bd-none">No match.</li>'}</ul>` : ''}
+        ${quiet.length ? `<h2 class="bd-sub">Quiet threads</h2><ul class="bd-list">${quiet.map(({ e, last }) => `<li class="bd-quiet"><b>${esc(e.name)}</b><span>Last mentioned in Ch. ${last}</span></li>`).join('')}</ul>` : ''}
+        <div class="bd-actions"><a class="btn btn-ghost btn-sm" href="#/studio/novel/${n.id}/bible?new=character">+ New entry</a><a class="btn btn-ghost btn-sm" href="#/studio/novel/${n.id}/bible">Open full bible</a></div>`;
+      if (ql) { const s = $('#bdSearch'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }
+    const setOpen = (v) => { open = v; host.hidden = !v; btn.setAttribute('aria-expanded', String(v)); document.body.classList.toggle('bible-open', v); try { localStorage.setItem('sfb.bibleDrawer', v ? '1' : '0'); } catch {} if (v) paint(); };
+    btn.addEventListener('click', () => setOpen(!open));
+    host.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-close]')) { setOpen(false); btn.focus(); return; }
+      const x = ev.target.closest('[data-x]'); if (x) { expanded.has(x.dataset.x) ? expanded.delete(x.dataset.x) : expanded.add(x.dataset.x); paint(); }
+    });
+    host.addEventListener('input', (ev) => { if (ev.target.id === 'bdSearch') { q = ev.target.value; paint(); } });
+    let t = null; const refresh = () => { clearTimeout(t); t = setTimeout(() => { if (entries) paint(); }, 600); };
+    body.addEventListener('input', refresh); titleEl.addEventListener('input', refresh);
+    bible.load(n.id).then((list) => { entries = list; paint(); }, (err) => { error = err.message; paint(); });
+    try { if (localStorage.getItem('sfb.bibleDrawer') === '1') setOpen(true); } catch {}
+    return () => { clearTimeout(t); host.remove(); document.body.classList.remove('bible-open'); };
+  }
+
+  /* Readers' spoiler-safe "Who's who" sheet. */
+  function openWhosWho({ n, upto, data, mount }) {
+    const d = document.createElement('dialog'); d.className = 'whos-sheet'; d.setAttribute('aria-labelledby', 'wwTitle');
+    const groups = [['character', 'People'], ['place', 'Places'], ['other', 'More']].map(([k, label]) => ({ k, label, list: data.entries.filter((e) => (k === 'other' ? !['character', 'place'].includes(e.kind) : e.kind === k)) })).filter((g) => g.list.length);
+    let tab = groups[0]?.k;
+    const paint = () => {
+      const g = groups.find((x) => x.k === tab);
+      d.innerHTML = `<div class="ww-in"><div class="ww-head"><div><h2 id="wwTitle">Who’s who</h2><p>Only what you’ve read so far. No spoilers.</p></div><span class="ww-upto">Up to Ch. ${upto}</span><button type="button" class="ww-x" data-close aria-label="Close">×</button></div>
+        ${groups.length > 1 ? `<div class="ww-tabs" role="group" aria-label="Sections">${groups.map((x) => `<button type="button" data-tab="${x.k}" aria-pressed="${x.k === tab}">${x.label}</button>`).join('')}</div>` : ''}
+        <ul class="ww-list">${g ? g.list.map((e) => `<li>${bibleAvatar(e)}<div><b>${esc(e.name)}</b>${e.role ? `<span class="ww-role">${esc(e.role)}</span>` : ''}${e.summary ? `<p>${esc(e.summary)}</p>` : ''}</div></li>`).join('') : '<li class="ww-none">Nothing here yet.</li>'}
+          ${data.locked ? `<li class="ww-locked"><span class="b-av" aria-hidden="true">?</span><div><b>${data.locked} more ${data.locked === 1 ? 'entry' : 'entries'}</b><p>Keep reading to unlock.</p></div></li>` : ''}</ul>
+        <p class="ww-fine">Written by ${esc(api.users.byId(n.author_id)?.name || 'the author')}.</p></div>`;
+    };
+    d.addEventListener('click', (ev) => {
+      if (ev.target === d || ev.target.closest('[data-close]')) { d.close(); return; }
+      const b = ev.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; paint(); }
+    });
+    d.addEventListener('close', () => d.remove());
+    paint(); (mount || document.body).appendChild(d); d.showModal();
+  }
+
   /* Chapter editor autosave.
      Every keystroke is backed up in this browser right away (survives a closed tab, a crash, or no internet).
      Drafts also save to the server a moment after you stop typing, plus every 30 seconds while you keep going.
@@ -1166,7 +1456,7 @@
     const isLive = c.status === 'published';
     app.innerHTML = `<div class="editor">
       <div class="ed-top"><div class="crumbs" style="margin:0"><a href="#/studio">Studio</a> / <a href="#/studio/novel/${n.id}">${esc(n.title || 'Untitled series')}</a> / Chapter ${c.chapter_number}</div>
-        <div class="row"><span class="badge ${isLive ? 'badge-live' : 'badge-draft'}">${isLive ? 'PUBLISHED' : 'DRAFT'}</span><span class="save-state" id="state" aria-live="polite"></span>${isLive ? '' : '<button class="btn btn-ghost btn-sm" id="saveBtn">Save draft</button>'}${isLive ? '<button class="btn btn-primary btn-sm" id="pubBtn">Update chapter</button><button class="btn btn-ghost btn-sm" id="unpubBtn">Unpublish</button>' : '<button class="btn btn-primary btn-sm" id="pubBtn">Publish chapter</button>'}</div></div>
+        <div class="row"><span class="badge ${isLive ? 'badge-live' : 'badge-draft'}">${isLive ? 'PUBLISHED' : 'DRAFT'}</span><span class="save-state" id="state" aria-live="polite"></span><button class="btn btn-ghost btn-sm bible-btn" id="bibleBtn" aria-expanded="false" aria-controls="bibleDrawer">${ICON_BOOK}Bible</button>${isLive ? '' : '<button class="btn btn-ghost btn-sm" id="saveBtn">Save draft</button>'}${isLive ? '<button class="btn btn-primary btn-sm" id="pubBtn">Update chapter</button><button class="btn btn-ghost btn-sm" id="unpubBtn">Unpublish</button>' : '<button class="btn btn-primary btn-sm" id="pubBtn">Publish chapter</button>'}</div></div>
       <div id="restoreBar"></div>
       <input class="ed-title" id="title" value="${esc(c.title)}" placeholder="Chapter title" maxlength="140" aria-label="Chapter title">
       <div class="toolbar" role="toolbar" aria-label="Formatting">
@@ -1194,6 +1484,7 @@
     };
     const tick = setInterval(paintState, 15000);
     paintState();
+    const unmountBible = mountBibleDrawer({ n, c, body, titleEl: title, btn: $('#bibleBtn') });
 
     async function saveServer(announce) {
       clearTimeout(timer); clearTimeout(maxTimer); maxTimer = null;
@@ -1248,7 +1539,7 @@
     $('#unpubBtn')?.addEventListener('click', async () => { await saveServer(false); if (failed) return; await api.chapters.unpublish(c.id); toast('Chapter unpublished'); render(); });
     window.onbeforeunload = () => (dirty && (isLive || failed) ? 'Unsaved changes.' : undefined);
     cleanup = () => {
-      window.onbeforeunload = null; clearInterval(tick); clearTimeout(timer); clearTimeout(maxTimer);
+      window.onbeforeunload = null; clearInterval(tick); clearTimeout(timer); clearTimeout(maxTimer); unmountBible();
       document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('online', onOnline);
       if (dirty && !isLive) saveServer(false);
     };
