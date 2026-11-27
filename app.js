@@ -129,16 +129,18 @@
     ['notifications', ['created_at', 'id']], ['friendships', ['created_at', 'id']], ['reading_progress', ['at', 'user_id', 'novel_id']],
   ];
   async function loadAll() {
-    const [res, upcoming, reviews, notices, mod] = await Promise.all([
+    const [res, upcoming, reviews, notices, mod, chRatings] = await Promise.all([
       Promise.all(TABLES.map(([t, order]) => fetchAll(t, order))),
       sb.rpc('upcoming_releases'),
       fetchAll('reviews', ['created_at', 'id']).catch(() => null),
       sessionUid ? sb.from('notices').select('*').order('created_at', { ascending: false }).limit(300) : Promise.resolve({ data: [] }),
       sessionUid ? sb.rpc('is_mod') : Promise.resolve({ data: false }),
+      fetchAll('chapter_ratings', ['created_at', 'chapter_id', 'user_id']).catch(() => null),
     ]);
     const [users, novels, chapters, chapter_comments, chapter_likes, subscriptions, favorites, notifications, friendships, progress] = res;
     features.sql = !upcoming.error && reviews !== null;
     features.mod = features.sql && mod.data === true;
+    features.chRatings = features.sql && chRatings !== null; // needs supabase-chapter-ratings.sql
     const reading_progress = {}, reading_log = {}, reading_pct = {};
     progress.forEach((p) => {
       (reading_progress[p.user_id] ||= {})[p.novel_id] = p.chapter_id;
@@ -151,6 +153,7 @@
       novels: novels.map((n) => ({ ...n, genres: n.genres || [], tags: n.tags || [], maturity: n.maturity || 'everyone' })),
       friendships: friendships.map((f) => ({ ...f, from: f.from_id, to: f.to_id })),
       reviews: reviews || [],
+      chapter_ratings: chRatings || [],
       notices: notices.error ? [] : notices.data || [],
       upcoming: Object.fromEntries((upcoming.data || []).map((u) => [u.novel_id, { at: Number(u.next_at), queued: u.queued }])),
     };
@@ -403,9 +406,21 @@
         db.reviews.push(row); return row;
       },
       async remove(id) { await must(sb.from('reviews').delete().eq('id', id)); db.reviews = db.reviews.filter((r) => r.id !== id); },
+      /** One-tap series rating. Keeps any written review the reader already left. */
+      setRating(userId, novelId, rating) { const my = api.reviews.mine(userId, novelId); return api.reviews.save(userId, novelId, { rating, body: my?.body || '', spoiler: my?.spoiler || false }); },
       async reply(id, text) {
         await must(sb.rpc('reply_to_review', { p_review: id, p_reply: text }));
         const r = db.reviews.find((x) => x.id === id); if (r) { r.author_reply = text.trim() || null; r.author_reply_at = text.trim() ? now() : null; }
+      },
+    },
+    /** Quick star ratings for single chapters (0 to 5). One per reader per chapter. */
+    chRatings: {
+      mine: (userId, chapterId) => db.chapter_ratings.find((r) => r.user_id === userId && r.chapter_id === chapterId)?.rating ?? null,
+      summary(chapterId) { const l = db.chapter_ratings.filter((r) => r.chapter_id === chapterId); return { count: l.length, avg: l.length ? l.reduce((t, r) => t + r.rating, 0) / l.length : 0 }; },
+      async set(userId, chapterId, rating) {
+        await must(sb.from('chapter_ratings').upsert({ chapter_id: chapterId, user_id: userId, rating }, { onConflict: 'chapter_id,user_id' }));
+        const r = db.chapter_ratings.find((x) => x.user_id === userId && x.chapter_id === chapterId);
+        if (r) r.rating = rating; else db.chapter_ratings.push({ chapter_id: chapterId, user_id: userId, rating, created_at: now() });
       },
     },
     /** Reports go to the moderators. The database fills in who owns the reported thing. */
@@ -491,6 +506,8 @@
   };
   const stars = (r, { small = false } = {}) => { const full = Math.round(r * 2) / 2; return `<span class="stars ${small ? 'sm' : ''}" aria-label="${(Math.round(r * 10) / 10).toLocaleString()} out of 5 stars">${[1, 2, 3, 4, 5].map((i) => `<i class="${full >= i ? 'on' : full >= i - 0.5 ? 'half' : ''}" aria-hidden="true">★</i>`).join('')}</span>`; };
   const ratingText = (avg) => (Math.round(avg * 10) / 10).toFixed(1);
+  /** Tappable 0-5 stars. key says what's being rated ("series" or "ch:<id>"); value is the current rating or null. */
+  const starPick = (key, value, label) => `<div class="star-pick" role="radiogroup" aria-label="${esc(label)}" data-sp="${esc(key)}">${[0, 1, 2, 3, 4, 5].map((v) => `<button type="button" role="radio" aria-checked="${value === v}" data-v="${v}" class="${v === 0 ? 'zero' : value !== null && value !== undefined && v <= value ? 'on' : ''}" aria-label="${v} out of 5" title="${v} out of 5">${v === 0 ? '0' : '★'}</button>`).join('')}</div>`;
 
   /* 3b. Gifting + Ink ------------------------------------------------------
      Prices, balances and the 60/40 split all live in Supabase (supabase/gifting.sql).
@@ -882,7 +899,7 @@
       return `<li class="${s.done ? 'read' : ''}${canGift ? ' has-gift' : ''}">
         <a href="#/novel/${esc(n.slug)}/ch/${i + 1}"><span class="n"><small>Ch.</small>${i + 1}</span>
           <div><div class="t">${esc(c.title)}${isNew ? '<span class="badge badge-up">NEW</span>' : ''}</div>
-            <div class="m">${esc(fmtDate(c.published_at))} · ${readMin(wordCount(c.content))} min · ♥ ${compact(c.likes)}<span class="row-gifts" data-row-gifts="${c.id}">${c.gift_count ? ` · ${giftCountText(c.gift_count)}` : ''}</span></div>
+            <div class="m">${esc(fmtDate(c.published_at))} · ${readMin(wordCount(c.content))} min · ♥ ${compact(c.likes)}${features.chRatings && api.chRatings.summary(c.id).count ? ` · ★ ${ratingText(api.chRatings.summary(c.id).avg)}` : ''}<span class="row-gifts" data-row-gifts="${c.id}">${c.gift_count ? ` · ${giftCountText(c.gift_count)}` : ''}</span></div>
             ${!s.done && s.pct > 0 ? `<div class="ep-prog" aria-hidden="true"><i style="width:${s.pct}%"></i></div>` : ''}</div>
           ${right}</a>
         ${canGift ? `<button type="button" class="ep-gift" data-gift-ch="${c.id}" aria-label="Send a gift for chapter ${i + 1}" title="Gift this chapter">${ICON_GIFT}</button>` : ''}
@@ -903,6 +920,7 @@
               <button class="btn btn-ghost btn-lg fav-btn" id="favBtn" aria-pressed="${faved}">${faved ? '★ Favorited' : '☆ Favorite'}</button>
               ${canGift ? `<button class="btn btn-ghost btn-lg gift-btn" id="giftBtn">${ICON_GIFT}Gift series</button>` : ''}
             </div>
+            ${features.sql && !mine && chs.length ? quickRate(n, me) : ''}
             ${me && started && chs.length ? `<div class="series-prog"><div class="sp-row"><span>Your progress</span><b>${doneCount} of ${plural(chs.length, 'chapter')} read</b></div><div class="sp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${overall}" aria-label="Series progress"><i style="width:${overall}%"></i></div></div>` : ''}
           </div></div></div>
       <div class="series-body series-layout">
@@ -923,7 +941,15 @@
 
     if (features.sql) paintReviews({ n, host: $('#rvSection'), me, mine, sort: query.rsort || 'new' });
     if (query.go === 'reviews') setTimeout(() => $('#rvSection')?.scrollIntoView({ block: 'start' }), 50);
-    app.querySelector('[data-jump]')?.addEventListener('click', (e) => { e.preventDefault(); $('#rvSection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    app.querySelectorAll('[data-jump]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); $('#rvSection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); if (a.dataset.jump === 'write') setTimeout(() => { $('#rvSection [data-edit]')?.click(); $('#rvBody')?.focus(); }, 350); }));
+    // One-tap series rating at the top of the page.
+    $('#qrSeries')?.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-v]'); if (!b) return;
+      if (!requireAuth()) return;
+      const v = +b.dataset.v; $$('#qrSeries button').forEach((x) => { x.disabled = true; });
+      try { await api.reviews.setRating(me.id, n.id, v); toast(`You rated ${n.title} ${v}/5`); app.dataset.keepScroll = '1'; render(); }
+      catch (err) { toast(err.message); $$('#qrSeries button').forEach((x) => { x.disabled = false; }); }
+    });
 
     if (gifting.ready) paintSupporters(n, $('#supporters'), mine);
     const afterGift = ({ chapterId } = {}) => {
@@ -1029,6 +1055,17 @@
     const reader = $('#reader'), canvas = $('#rdCanvas');
     const loaded = new Set(); let current = startIdx;
 
+    /** "Rate this chapter" row at the end of each chapter (the writer just sees the score). */
+    const rateBlock = (c) => {
+      if (!features.chRatings) return '';
+      const sm = api.chRatings.summary(c.id);
+      const avg = sm.count ? `${stars(sm.avg, { small: true })} <b>${ratingText(sm.avg)}</b> from ${plural(sm.count, 'reader')}` : '';
+      if (mine) return `<div class="ep-rate mine"><b>Reader rating</b><span class="er-avg">${avg || 'No ratings yet'}</span></div>`;
+      const my = me ? api.chRatings.mine(me.id, c.id) : null;
+      return `<div class="ep-rate" data-rate-ch="${c.id}"><b>${my !== null ? 'Your rating' : 'Rate this chapter'}</b>${starPick('ch:' + c.id, my, 'Rate this chapter from 0 to 5 stars')}<span class="er-avg">${avg}</span></div>`;
+    };
+    const seriesPick = () => starPick('series', me ? api.reviews.mine(me.id, n.id)?.rating ?? null : null, `Rate ${n.title} from 0 to 5 stars`);
+
     const chapterBlock = (idx) => {
       const c = chs[idx]; const words = wordCount(c.content);
       return `<article class="ep" id="ch-${idx + 1}" data-idx="${idx}">
@@ -1042,11 +1079,12 @@
           <span class="sp"></span>
           ${idx + 1 < chs.length ? `<a href="#/novel/${esc(n.slug)}/ch/${idx + 2}" data-next="${idx + 1}">Next chapter</a>` : ''}
         </div>
+        ${rateBlock(c)}
         ${!gifting.ready ? '' : mine
           ? `<div class="gift-band mine"><span class="gb-art">${giftSvg('candle', 40)}</span><div class="gb-t"><b>Gifts on this chapter</b><span data-gift-count="${c.id}">${giftCountText(c.gift_count, 'No gifts yet')}</span></div></div>`
           : `<div class="gift-band"><span class="gb-art">${giftSvg('candle', 40)}</span><div class="gb-t"><b>Enjoyed this chapter?</b><span>Send ${esc(a.name)} a gift. <span class="gb-count" data-gift-count="${c.id}">${c.gift_count ? giftCountText(c.gift_count) + ' so far.' : ''}</span></span></div><button type="button" class="gb-btn" data-gift="${c.id}">${ICON_GIFT}Send a gift</button></div>`}
         <section class="ep-comments" id="cmts-${c.id}"></section>
-        ${idx + 1 < chs.length ? `<div class="ep-next" data-sentinel="${idx + 1}"></div>` : `<div class="ep-end"><b>You are caught up</b>${upcoming && upcoming.at > now() ? `The next chapter arrives ${esc(fmtWhen(upcoming.at))} (${esc(fmtIn(upcoming.at))}).` : n.status === 'completed' ? 'This series is complete.' : n.update_day !== null ? `New chapters arrive on ${DAYS_LONG[n.update_day]}s.` : 'More is on the way.'}${features.sql && !mine ? `<br><a class="ep-review" href="#/novel/${esc(n.slug)}?go=reviews">${api.reviews.mine(me?.id, n.id) ? 'Edit your review' : 'Rate and review this series'}</a>` : ''}<br><button class="btn btn-sm" data-sub data-long aria-pressed="${following()}" style="margin-top:12px">${followLabel(following(), true)}</button></div>`}
+        ${idx + 1 < chs.length ? `<div class="ep-next" data-sentinel="${idx + 1}"></div>` : `<div class="ep-end"><b>You are caught up</b>${upcoming && upcoming.at > now() ? `The next chapter arrives ${esc(fmtWhen(upcoming.at))} (${esc(fmtIn(upcoming.at))}).` : n.status === 'completed' ? 'This series is complete.' : n.update_day !== null ? `New chapters arrive on ${DAYS_LONG[n.update_day]}s.` : 'More is on the way.'}${features.sql && !mine ? `<div class="ep-series-rate"><span>How’s the series so far?</span>${seriesPick()}<a class="ep-review" href="#/novel/${esc(n.slug)}?go=reviews">${api.reviews.mine(me?.id, n.id)?.body ? 'Edit your review' : 'Write a review'}</a></div>` : ''}<br><button class="btn btn-sm" data-sub data-long aria-pressed="${following()}" style="margin-top:12px">${followLabel(following(), true)}</button></div>`}
       </article>`;
     };
 
@@ -1167,6 +1205,23 @@
     // Bottom nav
     $('#navSel').addEventListener('change', (e) => go(`/novel/${n.slug}/ch/${e.target.value}`));
     canvas.addEventListener('click', async (e) => {
+      const star = e.target.closest('[data-sp] [data-v]');
+      if (star) {
+        if (!requireAuth()) return;
+        const key = star.closest('[data-sp]').dataset.sp; const v = +star.dataset.v;
+        try {
+          if (key.startsWith('ch:')) {
+            const id = key.slice(3); await api.chRatings.set(me.id, id, v);
+            const blk = canvas.querySelector(`[data-rate-ch="${id}"]`); if (blk) blk.outerHTML = rateBlock(api.chapters.byId(id));
+            toast(`You rated this chapter ${v}/5`);
+          } else {
+            await api.reviews.setRating(me.id, n.id, v);
+            canvas.querySelectorAll('[data-sp="series"]').forEach((el) => { el.outerHTML = seriesPick(); });
+            toast(`You rated ${n.title} ${v}/5`);
+          }
+        } catch (err) { toast(err.message); }
+        return;
+      }
       const nxt = e.target.closest('[data-next]');
       if (nxt) { const block = $(`#ch-${+nxt.dataset.next + 1}`); if (block) { e.preventDefault(); block.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; } }
       const gift = e.target.closest('[data-gift]');
@@ -1421,7 +1476,7 @@
         : stt === 'scheduled' ? `<button class="btn btn-ghost btn-sm" data-sched="${c.id}">Change time</button><button class="btn btn-ghost btn-sm" data-unsched="${c.id}">Unschedule</button><button class="btn btn-primary btn-sm" data-pub="${c.id}">Publish now</button>`
         : `${features.sql ? `<button class="btn btn-ghost btn-sm" data-sched="${c.id}">Schedule</button>` : ''}<button class="btn btn-primary btn-sm" data-pub="${c.id}">Publish</button>`;
       return `<li class="${stt === 'scheduled' ? 'is-sched' : ''}"><span class="n">${c.chapter_number}</span><div><a class="t" href="#/studio/novel/${n.id}/ch/${c.id}">${esc(c.title || 'Untitled chapter')}</a>
-        <div class="m">${badge}${stt === 'scheduled' ? `<span class="sched-note">${ICON_CLOCK}Goes live ${esc(fmtWhen(c.scheduled_at))}</span>` : ''}${readerNo && readerNo !== c.chapter_number ? `<span>Readers see Ch. ${readerNo}</span>` : ''}<span>${wordCount(c.content).toLocaleString()} words</span>${c.author_note ? '<span>note ✓</span>' : ''}<span>${esc(timeAgo(c.updated_at))}</span></div></div>
+        <div class="m">${badge}${stt === 'scheduled' ? `<span class="sched-note">${ICON_CLOCK}Goes live ${esc(fmtWhen(c.scheduled_at))}</span>` : ''}${readerNo && readerNo !== c.chapter_number ? `<span>Readers see Ch. ${readerNo}</span>` : ''}${features.chRatings && api.chRatings.summary(c.id).count ? `<span>★ ${ratingText(api.chRatings.summary(c.id).avg)} (${api.chRatings.summary(c.id).count})</span>` : ''}<span>${wordCount(c.content).toLocaleString()} words</span>${c.author_note ? '<span>note ✓</span>' : ''}<span>${esc(timeAgo(c.updated_at))}</span></div></div>
         <div class="a"><button class="btn btn-soft btn-sm" data-move="-1" data-id="${c.id}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="btn btn-soft btn-sm" data-move="1" data-id="${c.id}" ${i === chs.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>${acts}<button class="btn btn-ghost btn-sm" data-del="${c.id}">Delete</button></div></li>`;
     };
 
@@ -1780,13 +1835,19 @@
   }
 
   /* Reviews -------------------------------------------------------------------- */
+  /** "Rate this series" row under the series buttons: tap a star and it's saved. */
+  function quickRate(n, me) {
+    const my = me ? api.reviews.mine(me.id, n.id) : null;
+    return `<div class="quick-rate" id="qrSeries"><span class="qr-lbl">${my ? 'Your rating' : 'Rate this series'}</span>${starPick('series', my ? my.rating : null, 'Rate this series from 0 to 5 stars')}
+      <span class="qr-out">${my ? `<a href="#rvSection" data-jump="write">${my.body ? 'Edit your review' : 'Add a written review'}</a>` : '<span class="muted">Tap a star. Writing a review is optional.</span>'}</span></div>`;
+  }
   /** Draws the reviews block on a series page: average, star bars, your review, everyone else's. */
   function paintReviews({ n, host, me, mine, sort = 'new' }) {
     if (!host) return;
     const sum = api.reviews.summary(n.id); const my = me ? api.reviews.mine(me.id, n.id) : null;
-    const hasRead = me && (api.progress.get(me.id, n.id) || api.novels.published(n.id).some((c) => readPos.get(c.id).p > 0));
-    const others = api.reviews.forNovel(n.id).filter((r) => r.id !== my?.id).sort((a, b) => sort === 'high' ? b.rating - a.rating || b.created_at - a.created_at : sort === 'low' ? a.rating - b.rating || b.created_at - a.created_at : b.created_at - a.created_at);
-    let editing = !my; let pick = my ? my.rating : null; const shown = new Set();
+    // Star-only ratings count toward the average; the list shows written reviews.
+    const others = api.reviews.forNovel(n.id).filter((r) => r.id !== my?.id && r.body).sort((a, b) => sort === 'high' ? b.rating - a.rating || b.created_at - a.created_at : sort === 'low' ? a.rating - b.rating || b.created_at - a.created_at : b.created_at - a.created_at);
+    let editing = !my || !my.body; let pick = my ? my.rating : null; const shown = new Set();
     const one = (r, own = false) => {
       const u = api.users.byId(r.user_id); const author = api.users.byId(n.author_id);
       const body = r.body ? (r.spoiler && !own && !shown.has(r.id) ? `<div class="rv-spoiler"><span>This review has spoilers.</span><button type="button" class="btn btn-ghost btn-sm" data-show="${r.id}">Show it</button></div>` : `<p class="rv-body">${esc(r.body)}</p>`) : '';
@@ -1801,14 +1862,13 @@
       const s = api.reviews.summary(n.id); const max = Math.max(1, ...s.hist);
       const form = !me ? `<div class="rv-cta"><a href="#/login?next=${encodeURIComponent('/novel/' + n.slug)}">Log in</a> to rate and review this series.</div>`
         : mine ? '<p class="muted small">Readers rate your series here. You can reply once to each review.</p>'
-        : !hasRead && !my ? '<div class="rv-cta">Start reading to leave a review.</div>'
         : editing ? `<form class="rv-form" id="rvForm"><div class="lbl" id="rvPickLbl">Your rating</div>
             <div class="star-pick" role="radiogroup" aria-labelledby="rvPickLbl">${[0, 1, 2, 3, 4, 5].map((v) => `<button type="button" role="radio" aria-checked="${pick === v}" data-v="${v}" class="${v === 0 ? 'zero' : pick !== null && v <= pick ? 'on' : ''}" aria-label="${v} out of 5">${v === 0 ? '0' : '★'}</button>`).join('')}<span class="sp-out">${pick === null ? 'Pick 0 to 5 stars' : `${pick} out of 5`}</span></div>
             <label class="sr-only" for="rvBody">Your review</label><textarea class="textarea" id="rvBody" maxlength="4000" placeholder="What worked for you? What didn’t? (optional)">${esc(my?.body || '')}</textarea>
             <div class="row between rv-form-foot"><label class="b-check"><input type="checkbox" id="rvSpoil" ${my?.spoiler ? 'checked' : ''}> Contains spoilers</label><div class="row">${my ? '<button type="button" class="btn btn-ghost btn-sm" id="rvCancel">Cancel</button>' : ''}<button class="btn btn-primary btn-sm" type="submit" ${pick === null ? 'disabled' : ''}>${my ? 'Save review' : 'Post review'}</button></div></div></form>`
         : '';
       host.innerHTML = `<div class="rv-top"><h2 id="rvTitle">Reviews</h2>${s.count > 1 ? `<select class="select rv-sort" id="rvSort" aria-label="Sort reviews"><option value="new" ${sort === 'new' ? 'selected' : ''}>Newest</option><option value="high" ${sort === 'high' ? 'selected' : ''}>Highest</option><option value="low" ${sort === 'low' ? 'selected' : ''}>Lowest</option></select>` : ''}</div>
-        ${s.count ? `<div class="rv-sum"><div class="rv-big"><b>${ratingText(s.avg)}</b>${stars(s.avg)}<span>${plural(s.count, 'review')}</span></div>
+        ${s.count ? `<div class="rv-sum"><div class="rv-big"><b>${ratingText(s.avg)}</b>${stars(s.avg)}<span>${plural(s.count, 'rating')}${(() => { const w = api.reviews.forNovel(n.id).filter((r) => r.body).length; return w ? ` · ${plural(w, 'review')}` : ''; })()}</span></div>
           <ol class="rv-bars">${[5, 4, 3, 2, 1, 0].map((v) => `<li><span>${v}</span><span class="bar"><i style="width:${(s.hist[v] / max) * 100}%"></i></span><span class="c">${s.hist[v]}</span></li>`).join('')}</ol></div>` : '<p class="muted small">No reviews yet.</p>'}
         ${form}
         <ul class="rv-list">${my && !editing ? one(my, true) : ''}${others.map((r) => one(r)).join('')}</ul>`;
