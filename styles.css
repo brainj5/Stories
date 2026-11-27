@@ -1152,3 +1152,26 @@ h1 .badge-age { font-size: 11px; vertical-align: 6px; }
 .mod-detail { font-size: var(--t-sm); margin: 8px 0 0; }
 .hint { font-size: var(--t-xs); color: var(--graphite-3); line-height: 1.5; }
 p.hint { margin: 6px 0 0; }
+
+/* Quick ratings: series header, end of chapter */
+.quick-rate { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; margin-top: 14px; }
+.quick-rate .qr-lbl { font-size: var(--t-sm); font-weight: 700; }
+.quick-rate .star-pick { margin: 0; }
+.quick-rate .star-pick button { width: 34px; height: 34px; font-size: 24px; }
+.quick-rate .star-pick button.zero { width: 28px; height: 28px; font-size: var(--t-xs); margin-right: 2px; }
+.quick-rate .qr-out { font-size: var(--t-xs); }
+.quick-rate .qr-out a { color: var(--ultra); font-weight: 700; }
+.star-pick button:disabled { opacity: .5; }
+.ep-rate { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; margin-top: 18px; padding: 12px 16px; border-radius: var(--r); background: var(--rd-card); font-size: var(--t-sm); }
+.ep-rate .star-pick { margin: 0; }
+.ep-rate .star-pick button, .ep-series-rate .star-pick button { width: 34px; height: 34px; font-size: 24px; color: var(--rd-line); }
+.ep-rate .star-pick button.on, .ep-series-rate .star-pick button.on { color: #f2a900; }
+.ep-rate .star-pick button.zero, .ep-series-rate .star-pick button.zero { width: 28px; height: 28px; font-size: var(--t-xs); color: var(--rd-muted); border-color: var(--rd-line); }
+.ep-rate .star-pick button.zero[aria-checked="true"], .ep-series-rate .star-pick button.zero[aria-checked="true"] { background: var(--rd-fg); color: var(--rd-bg); border-color: var(--rd-fg); }
+.ep-rate .star-pick button:hover, .ep-series-rate .star-pick button:hover { background: var(--rd-bg); }
+.ep-rate .er-avg { color: var(--rd-muted); font-size: var(--t-xs); display: inline-flex; align-items: center; gap: 5px; }
+.ep-rate .er-avg b { color: var(--rd-fg); }
+.ep-rate.mine { justify-content: space-between; }
+.ep-series-rate { display: grid; justify-items: center; gap: 4px; margin-top: 14px; }
+.ep-series-rate > span { font-weight: 600; }
+.ep-series-rate .star-pick { margin: 0; justify-content: center; }
